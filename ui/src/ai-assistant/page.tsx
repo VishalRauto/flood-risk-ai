@@ -484,10 +484,11 @@ Feel free to ask any questions about flood conditions or safety!`,
                                         title="AI Provider"
                                     >
                                         <option value="auto">Auto</option>
-                                        {Object.entries(availableProviders.providers || {}).map(([name, info]: [string, any]) => (
-                                            <option key={name} value={name} disabled={!info.available}>
+                                        {Object.entries(availableProviders.providers || {})
+                                            .filter(([, info]: [string, any]) => info.available)
+                                            .map(([name]: [string, any]) => (
+                                            <option key={name} value={name}>
                                                 {name === 'h2ogpte' ? 'H2OGPTE' : name === 'nvidia' ? 'NVIDIA' : name}
-                                                {!info.available && ' (Unavailable)'}
                                             </option>
                                         ))}
                                     </select>

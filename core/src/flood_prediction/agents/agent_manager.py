@@ -246,8 +246,15 @@ class AgentManager:
             elif isinstance(agent, RiskAnalyzerAgent):
                 details['analysis_data'] = {
                     'risk_history_count': len(agent.risk_history),
-                    'trend_analysis': agent.trend_analysis,
-                    'ml_predictions': agent.ml_predictions
+                    'compound_history_count': len(getattr(agent, 'compound_history', [])),
+                    'last_compound_risk': (
+                        agent.compound_history[-1].get('compound_risk')
+                        if getattr(agent, 'compound_history', []) else None
+                    ),
+                    'confidence': (
+                        agent.compound_history[-1].get('confidence')
+                        if getattr(agent, 'compound_history', []) else None
+                    ),
                 }
             
             elif isinstance(agent, EmergencyResponderAgent):

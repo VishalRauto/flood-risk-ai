@@ -17,7 +17,8 @@ import {
     Sparkles,
     Brain,
     ChevronDown,
-    ChevronUp
+    ChevronUp,
+    FlaskConical
 } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import { dashboardApi, analyticsApi, aiApi, agentsApi, regionsApi, type DashboardData, type AnalyticsData, type AgentSummary, type AgentInsight, type Region } from '@/lib/api'
@@ -37,6 +38,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import h2oIcon from '@/assets/h2o.ico'
+import ResearchDashboard from '@/components/ResearchDashboard'
 
 interface Message {
     id: number
@@ -1168,7 +1170,8 @@ I can help you with:
                                 { id: 1, name: 'Live Map', desc: 'Real-time watershed monitoring', icon: MapPin },
                                 { id: 2, name: 'Analytics', desc: 'Trends and forecasting', icon: BarChart3 },
                                 { id: 3, name: 'Alerts', desc: 'Emergency notifications', icon: AlertTriangle },
-                                { id: 4, name: 'AI Agents', desc: 'Agent details and management', icon: Brain }
+                                { id: 4, name: 'AI Agents', desc: 'Agent details and management', icon: Brain },
+                                { id: 5, name: 'Research', desc: 'ML metrics, validation & ablation', icon: FlaskConical }
                             ]}
                             activeTab={activeTab}
                             onTabChange={setActiveTab}
@@ -1428,7 +1431,7 @@ I can help you with:
                 {/* Center Map Content */}
                 <div className="flex-1 flex flex-col">
                     <div className="flex-1 p-6">
-                        <div className={`bg-gray-900/30 rounded-xl h-full border border-border overflow-hidden relative ${activeTab === 4 ? 'flex flex-col' : 'flex items-center justify-center'}`}>
+                        <div className={`bg-gray-900/30 rounded-xl h-full border border-border overflow-hidden relative ${activeTab === 4 || activeTab === 5 ? 'flex flex-col' : 'flex items-center justify-center'}`}>
                             <div className="h-full w-full">
                                 {activeTab === 1 && (
                                     <div className="h-full w-full">
@@ -1905,6 +1908,11 @@ I can help you with:
                                         </div>
                                     </div>
                                 )}
+                                {activeTab === 5 && (
+                                    <div className="h-full w-full overflow-hidden">
+                                        <ResearchDashboard />
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -2015,9 +2023,11 @@ I can help you with:
                                 </SelectTrigger>
                                 <SelectContent>
                                     <SelectItem value="auto">Auto Provider</SelectItem>
-                                    {Object.entries(availableProviders.providers || {}).map(([key, provider]: [string, any]) => (
-                                        <SelectItem key={key} value={key} disabled={!provider.available}>
-                                            {provider.name || key} {!provider.available ? '(Unavailable)' : ''}
+                                    {Object.entries(availableProviders.providers || {})
+                                        .filter(([, provider]: [string, any]) => provider.available)
+                                        .map(([key, provider]: [string, any]) => (
+                                        <SelectItem key={key} value={key}>
+                                            {provider.name || key}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>

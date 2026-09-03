@@ -564,7 +564,7 @@ def fetch_and_store_imd_alerts(db_path: str) -> Dict[str, Any]:
 
             expires_time = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
 
-            alert_id = db.insert_noaa_alert(
+            alert_id = db.insert_imd_alert(
                 db_path,
                 alert_type=alert_type,
                 watershed_id=watershed['id'],

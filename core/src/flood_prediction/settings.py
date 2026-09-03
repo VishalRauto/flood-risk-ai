@@ -374,6 +374,17 @@ def configure_logging():
         cache_logger_on_first_use=True,
     )
 
+    # Silence noisy third-party loggers that pollute the console
+    logging.getLogger("twilio.http_client").setLevel(logging.ERROR)
+    logging.getLogger("twilio").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("openai._base_client").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("boto3").setLevel(logging.WARNING)
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+    logging.getLogger("rq.worker").setLevel(logging.WARNING)
+
 
 # Configure logging
 configure_logging()

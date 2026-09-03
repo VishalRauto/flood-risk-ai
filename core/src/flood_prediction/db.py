@@ -108,6 +108,84 @@ create table if not exists user_settings (
     updated_at timestamp default current_timestamp
 );
 
+-- =========================================================================
+-- Research tables (Task 9)
+-- =========================================================================
+
+-- ML model predictions per watershed per run
+create table if not exists model_predictions (
+    id integer primary key autoincrement,
+    watershed_id integer not null,
+    model_name text not null,              -- 'lstm' | 'gru' | 'transformer' | 'random_forest' | 'rule_based'
+    horizon_hours integer not null,        -- 6 | 12 | 24 | 48 | 72
+    predicted_discharge_cfs real not null,
+    predicted_risk_score real not null,
+    confidence real default 0.0,
+    features_used text,                    -- JSON list of feature names
+    predicted_at timestamp default current_timestamp,
+    valid_at timestamp not null,           -- The future time this prediction is for
+    foreign key (watershed_id) references watersheds(id)
+);
+
+-- Ground-truth validation results comparing predictions vs actuals
+create table if not exists validation_results (
+    id integer primary key autoincrement,
+    watershed_id integer not null,
+    model_name text not null,
+    horizon_hours integer not null,
+    predicted_discharge_cfs real not null,
+    actual_discharge_cfs real not null,
+    predicted_risk_score real not null,
+    actual_risk_score real not null,
+    predicted_flood_binary integer not null,   -- 0 or 1
+    actual_flood_binary integer not null,      -- 0 or 1
+    rmse real,
+    mae real,
+    nse real,                              -- Nash-Sutcliffe Efficiency
+    kge real,                              -- Kling-Gupta Efficiency
+    csi real,                              -- Critical Success Index
+    pod real,                              -- Probability of Detection
+    far real,                              -- False Alarm Rate
+    bias real,
+    evaluated_at timestamp default current_timestamp,
+    foreign key (watershed_id) references watersheds(id)
+);
+
+-- Ablation study scores — what LLM adds vs rule-only
+create table if not exists ablation_scores (
+    id integer primary key autoincrement,
+    run_id text not null,                  -- UUID per ablation run
+    condition text not null,               -- 'rule_only' | 'llm_enhanced' | 'llm_only'
+    query_text text not null,
+    response_text text not null,
+    factual_accuracy real,                 -- 0–1
+    actionability real,                    -- 0–1
+    safety_compliance real,                -- 0–1
+    specificity real,                      -- 0–1
+    overall_score real,                    -- weighted composite
+    evaluator_model text,                  -- which LLM judged this
+    created_at timestamp default current_timestamp
+);
+
+-- Baseline model predictions for head-to-head comparison
+create table if not exists baseline_predictions (
+    id integer primary key autoincrement,
+    watershed_id integer not null,
+    baseline_name text not null,           -- 'persistence' | 'climatology' | 'threshold' | 'arima' | 'linear_trend'
+    horizon_hours integer not null,
+    predicted_discharge_cfs real not null,
+    predicted_risk_score real not null,
+    predicted_flood_binary integer not null,
+    actual_discharge_cfs real,             -- filled in when actuals arrive
+    actual_flood_binary integer,
+    rmse real,
+    mae real,
+    csi real,
+    predicted_at timestamp default current_timestamp,
+    valid_at timestamp not null,
+    foreign key (watershed_id) references watersheds(id)
+);
+
 -- Legacy items table for backward compatibility
 create table if not exists items (
     id integer primary key autoincrement,
@@ -134,6 +212,17 @@ create index if not exists idx_system_metrics_name on system_metrics(metric_name
 create index if not exists idx_user_settings_user_id on user_settings(user_id);
 create index if not exists idx_items_name on items(name);
 create index if not exists idx_items_created_at on items(created_at);
+
+-- Research table indexes
+create index if not exists idx_model_preds_watershed on model_predictions(watershed_id, predicted_at);
+create index if not exists idx_model_preds_model on model_predictions(model_name, horizon_hours);
+create index if not exists idx_model_preds_valid_at on model_predictions(valid_at);
+create index if not exists idx_validation_model on validation_results(model_name, horizon_hours);
+create index if not exists idx_validation_watershed on validation_results(watershed_id, evaluated_at);
+create index if not exists idx_ablation_run on ablation_scores(run_id, condition);
+create index if not exists idx_ablation_created on ablation_scores(created_at);
+create index if not exists idx_baseline_watershed on baseline_predictions(watershed_id, baseline_name);
+create index if not exists idx_baseline_valid_at on baseline_predictions(valid_at);
 """
 
 
@@ -714,36 +803,70 @@ def get_analytics_data(path: str, time_range: str = "7d", metric: str = "risk_sc
     }
 
 def get_historical_analytics_data(path: str, time_range: str = "7d") -> List[Dict[str, Any]]:
-    """Generate historical trend data (simulated for demo)."""
-    import random
-    import math
+    """
+    Return real historical trend data from the risk_trends table.
+    Falls back to watershed snapshots if risk_trends is empty.
+    """
     from datetime import datetime, timedelta
-    
-    data = []
+
     days = 7 if time_range == "7d" else 30 if time_range == "30d" else 90
-    now = datetime.now()
-    
-    for i in range(days + 1):
-        date = now - timedelta(days=days - i)
-        
-        # Generate realistic fluctuating data
-        base_risk = 4.5
-        variation = math.sin(i * 0.3) * 2 + random.uniform(-0.5, 1.5)
-        risk_score = max(1, min(10, base_risk + variation))
-        
-        base_flow = 1500
-        flow_variation = math.sin(i * 0.2) * 800 + random.uniform(-200, 400)
-        avg_flow = max(100, base_flow + flow_variation)
-        
+    cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+
+    rows = execute_query(
+        path,
+        """
+        SELECT
+            date(timestamp)                          AS day,
+            AVG(risk_score)                          AS avg_risk,
+            AVG(streamflow_cfs)                      AS avg_flow,
+            COUNT(CASE WHEN risk_score >= 6 THEN 1 END) AS high_risk_count,
+            COUNT(DISTINCT watershed_id)             AS active_sites
+        FROM risk_trends
+        WHERE timestamp >= ?
+        GROUP BY date(timestamp)
+        ORDER BY day ASC
+        """,
+        (cutoff,)
+    )
+
+    data = []
+    for row in rows:
+        day_str, avg_risk, avg_flow, high_cnt, sites = row
+        try:
+            dt = datetime.strptime(day_str, "%Y-%m-%d")
+            label = dt.strftime("%b %d") if days <= 30 else dt.strftime("%m/%d")
+        except Exception:
+            label = day_str
+
         data.append({
-            'date': date.strftime('%Y-%m-%d'),
-            'time': date.strftime('%b %d') if days <= 30 else date.strftime('%m/%d'),
-            'avg_risk_score': round(risk_score, 1),
-            'avg_flow': round(avg_flow),
-            'high_risk_count': max(0, round((risk_score - 4) / 2)),
-            'alerts_count': max(0, round((risk_score - 5) / 2))
+            "date":           day_str,
+            "time":           label,
+            "avg_risk_score": round(float(avg_risk  or 0), 1),
+            "avg_flow":       round(float(avg_flow  or 0)),
+            "high_risk_count":int(high_cnt or 0),
+            "alerts_count":   max(0, int((float(avg_risk or 0) - 5) / 2)),
         })
-    
+
+    # If the risk_trends table is empty (fresh install), build from
+    # current watershed snapshots so the dashboard always has something real.
+    if not data:
+        watersheds = get_watersheds(path)
+        if watersheds:
+            now = datetime.utcnow()
+            avg_r = sum(float(w.get("risk_score") or 0) for w in watersheds) / len(watersheds)
+            avg_f = sum(float(w.get("current_streamflow_cfs") or 0) for w in watersheds) / len(watersheds)
+            high  = sum(1 for w in watersheds if float(w.get("risk_score") or 0) >= 6)
+            for i in range(min(days + 1, 7)):
+                dt = now - timedelta(days=days - i)
+                data.append({
+                    "date":           dt.strftime("%Y-%m-%d"),
+                    "time":           dt.strftime("%b %d"),
+                    "avg_risk_score": round(avg_r, 1),
+                    "avg_flow":       round(avg_f),
+                    "high_risk_count":high,
+                    "alerts_count":   max(0, int((avg_r - 5) / 2)),
+                })
+
     return data
 
 def get_risk_distribution_data(path: str) -> List[Dict[str, Any]]:
@@ -961,7 +1084,7 @@ Please provide a comprehensive, helpful response about India flood conditions. I
         ai_response = llm_call(full_prompt)
         
         # Parse confidence and recommendations from response if possible
-        confidence = 0.85 + random.uniform(-0.1, 0.1)
+        confidence = 0.75 + min(0.20, len(context_parts) * 0.03)
         
         # Generate contextual recommendations based on current conditions
         recommendations = _generate_contextual_recommendations(watersheds, alerts, watershed_data)
@@ -1192,6 +1315,176 @@ def count_items(path: str) -> int:
     """Get total number of items."""
     rows = execute_query(path, "select count(1) from items;")
     return rows[0][0]
+
+
+# =============================================================================
+# Research DB Functions (model predictions, validation, ablation, baselines)
+# =============================================================================
+
+def insert_model_prediction(path: str, watershed_id: int, model_name: str,
+                             horizon_hours: int, predicted_discharge_cfs: float,
+                             predicted_risk_score: float, confidence: float,
+                             valid_at: str, features_used: list = None) -> int:
+    """Insert an ML model prediction record."""
+    import json
+    return execute_insert(
+        path,
+        """INSERT INTO model_predictions
+               (watershed_id, model_name, horizon_hours, predicted_discharge_cfs,
+                predicted_risk_score, confidence, features_used, valid_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?);""",
+        (watershed_id, model_name, horizon_hours, predicted_discharge_cfs,
+         predicted_risk_score, confidence,
+         json.dumps(features_used) if features_used else None, valid_at)
+    )
+
+
+def insert_validation_result(path: str, watershed_id: int, model_name: str,
+                              horizon_hours: int, pred_discharge: float,
+                              actual_discharge: float, pred_risk: float,
+                              actual_risk: float, pred_flood: int, actual_flood: int,
+                              metrics: dict) -> int:
+    """Insert a validation result with computed metrics."""
+    return execute_insert(
+        path,
+        """INSERT INTO validation_results
+               (watershed_id, model_name, horizon_hours,
+                predicted_discharge_cfs, actual_discharge_cfs,
+                predicted_risk_score, actual_risk_score,
+                predicted_flood_binary, actual_flood_binary,
+                rmse, mae, nse, kge, csi, pod, far, bias)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+        (watershed_id, model_name, horizon_hours,
+         pred_discharge, actual_discharge, pred_risk, actual_risk,
+         pred_flood, actual_flood,
+         metrics.get('rmse'), metrics.get('mae'), metrics.get('nse'),
+         metrics.get('kge'), metrics.get('csi'), metrics.get('pod'),
+         metrics.get('far'), metrics.get('bias'))
+    )
+
+
+def get_validation_summary(path: str, model_name: str = None,
+                            horizon_hours: int = None) -> List[Dict[str, Any]]:
+    """Get aggregated validation metrics per model and horizon."""
+    conditions = []
+    params = []
+    if model_name:
+        conditions.append("model_name = ?")
+        params.append(model_name)
+    if horizon_hours:
+        conditions.append("horizon_hours = ?")
+        params.append(horizon_hours)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    rows = execute_query(
+        path,
+        f"""SELECT model_name, horizon_hours,
+                   COUNT(*) as n_samples,
+                   AVG(rmse) as mean_rmse, AVG(mae) as mean_mae,
+                   AVG(nse) as mean_nse, AVG(kge) as mean_kge,
+                   AVG(csi) as mean_csi, AVG(pod) as mean_pod,
+                   AVG(far) as mean_far, AVG(bias) as mean_bias
+            FROM validation_results {where}
+            GROUP BY model_name, horizon_hours
+            ORDER BY model_name, horizon_hours;""",
+        tuple(params)
+    )
+    return [
+        {'model_name': r[0], 'horizon_hours': r[1], 'n_samples': r[2],
+         'mean_rmse': round(r[3], 4) if r[3] else None,
+         'mean_mae': round(r[4], 4) if r[4] else None,
+         'mean_nse': round(r[5], 4) if r[5] else None,
+         'mean_kge': round(r[6], 4) if r[6] else None,
+         'mean_csi': round(r[7], 4) if r[7] else None,
+         'mean_pod': round(r[8], 4) if r[8] else None,
+         'mean_far': round(r[9], 4) if r[9] else None,
+         'mean_bias': round(r[10], 4) if r[10] else None}
+        for r in rows
+    ]
+
+
+def insert_ablation_score(path: str, run_id: str, condition: str,
+                          query_text: str, response_text: str,
+                          scores: dict, evaluator_model: str = None) -> int:
+    """Insert one ablation study result row."""
+    return execute_insert(
+        path,
+        """INSERT INTO ablation_scores
+               (run_id, condition, query_text, response_text,
+                factual_accuracy, actionability, safety_compliance,
+                specificity, overall_score, evaluator_model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+        (run_id, condition, query_text, response_text,
+         scores.get('factual_accuracy'), scores.get('actionability'),
+         scores.get('safety_compliance'), scores.get('specificity'),
+         scores.get('overall_score'), evaluator_model)
+    )
+
+
+def get_ablation_summary(path: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """Get ablation study aggregate by condition."""
+    rows = execute_query(
+        path,
+        """SELECT condition,
+                  COUNT(*) as n_queries,
+                  AVG(factual_accuracy) as avg_factual,
+                  AVG(actionability) as avg_action,
+                  AVG(safety_compliance) as avg_safety,
+                  AVG(specificity) as avg_specificity,
+                  AVG(overall_score) as avg_overall
+           FROM ablation_scores
+           GROUP BY condition
+           ORDER BY condition;"""
+    )
+    return [
+        {'condition': r[0], 'n_queries': r[1],
+         'avg_factual_accuracy': round(r[2], 3) if r[2] else None,
+         'avg_actionability': round(r[3], 3) if r[3] else None,
+         'avg_safety_compliance': round(r[4], 3) if r[4] else None,
+         'avg_specificity': round(r[5], 3) if r[5] else None,
+         'avg_overall_score': round(r[6], 3) if r[6] else None}
+        for r in rows
+    ]
+
+
+def insert_baseline_prediction(path: str, watershed_id: int, baseline_name: str,
+                                horizon_hours: int, predicted_discharge: float,
+                                predicted_risk: float, predicted_flood: int,
+                                valid_at: str) -> int:
+    """Insert a baseline model prediction."""
+    return execute_insert(
+        path,
+        """INSERT INTO baseline_predictions
+               (watershed_id, baseline_name, horizon_hours,
+                predicted_discharge_cfs, predicted_risk_score,
+                predicted_flood_binary, valid_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?);""",
+        (watershed_id, baseline_name, horizon_hours,
+         predicted_discharge, predicted_risk, predicted_flood, valid_at)
+    )
+
+
+def get_baseline_comparison(path: str, horizon_hours: int = 24) -> List[Dict[str, Any]]:
+    """Get baseline vs ML model comparison table for a given horizon."""
+    rows = execute_query(
+        path,
+        """SELECT baseline_name,
+                  COUNT(*) as n,
+                  AVG(rmse) as mean_rmse,
+                  AVG(mae) as mean_mae,
+                  AVG(csi) as mean_csi
+           FROM baseline_predictions
+           WHERE horizon_hours = ? AND rmse IS NOT NULL
+           GROUP BY baseline_name
+           ORDER BY mean_rmse ASC;""",
+        (horizon_hours,)
+    )
+    return [
+        {'baseline_name': r[0], 'n_samples': r[1],
+         'mean_rmse': round(r[2], 4) if r[2] else None,
+         'mean_mae': round(r[3], 4) if r[3] else None,
+         'mean_csi': round(r[4], 4) if r[4] else None}
+        for r in rows
+    ]
 
 
 # =============================================================================

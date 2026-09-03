@@ -1,5 +1,13 @@
 """
 Predictor Agent - AI-powered flood prediction and forecasting.
+
+Research upgrade (v2): integrates MLModelEnsemble (LSTM / GRU / Transformer /
+Random Forest) as the primary prediction engine.  Rule-based exponential-decay
+logic is retained as a graceful fallback when ML models are not yet trained or
+when torch/sklearn are unavailable in the environment.
+
+Model accuracy is now computed from real validation metrics via ValidationEngine
+rather than random.uniform() simulations.
 """
 
 import asyncio
@@ -13,9 +21,30 @@ from .base_agent import BaseAgent, AgentInsight, AgentAlert
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# ML ensemble — imported lazily so the agent still starts if torch is absent
+# ---------------------------------------------------------------------------
+try:
+    from ..ml_models import get_ensemble, EnsemblePrediction, MLModelEnsemble
+    from ..validation import get_validation_engine
+    _ML_AVAILABLE = True
+    logger.info("ML prediction modules loaded successfully")
+except Exception as _ml_import_err:
+    _ML_AVAILABLE = False
+    logger.warning(f"ML modules not available, using rule-based fallback: {_ml_import_err}")
+
 class PredictorAgent(BaseAgent):
-    """Agent responsible for AI-powered flood prediction and forecasting"""
-    
+    """Agent responsible for AI-powered flood prediction and forecasting.
+
+    Prediction pipeline (in priority order):
+      1. MLModelEnsemble  — LSTM / GRU / Transformer / Random Forest ensemble
+                           (requires torch / sklearn; auto-trains on first run)
+      2. Rule-based       — exponential-decay trend extrapolation (always available)
+
+    All predictions are stored in prediction_history for accuracy tracking and
+    are compared against the ValidationEngine metrics for the research dashboard.
+    """
+
     def __init__(self):
         super().__init__(
             name="AI Predictor",
@@ -26,9 +55,16 @@ class PredictorAgent(BaseAgent):
         self.model_accuracy_scores = {}
         self.forecast_horizon = 72  # hours
         self.confidence_threshold = 0.7
+
+        # ML ensemble — lazily initialised on first prediction
+        self._ensemble: Optional["MLModelEnsemble"] = None
+        self._ml_ready: bool = False
+        self._validation_metrics: Dict[str, Any] = {}   # cached from ValidationEngine
         
     async def analyze(self, data: Dict[str, Any]) -> List[AgentInsight]:
         """Analyze predictive model performance and generate forecasts"""
+        # Ensure ML ensemble is initialised (non-blocking)
+        await self._ensure_ml_ready()
         insights = []
         
         # Model accuracy insight
@@ -189,56 +225,110 @@ class PredictorAgent(BaseAgent):
             return {}
     
     async def _predict_watershed_conditions(self, watershed: Dict[str, Any], hours_ahead: int) -> Dict[str, Any]:
-        """Predict conditions for a specific watershed"""
+        """
+        Predict conditions for a specific watershed.
+
+        Uses MLModelEnsemble when available (LSTM/GRU/Transformer/RF ensemble),
+        falls back to rule-based exponential-decay when ML is unavailable.
+        """
         try:
-            current_flow = watershed.get('current_streamflow_cfs', 0)
-            current_risk = watershed.get('risk_score', 0)
-            trend_rate = watershed.get('trend_rate_cfs_per_hour', 0)
-            
-            # Simple prediction model (in reality, this would use sophisticated ML models)
+            current_flow = float(watershed.get('current_streamflow_cfs') or 0)
+            current_risk = float(watershed.get('risk_score') or 0)
+            trend_rate = float(watershed.get('trend_rate_cfs_per_hour') or 0)
+            flood_stage = float(watershed.get('flood_stage_cfs') or max(current_flow * 2, 1))
+
+            # ── ML ensemble path ──────────────────────────────────────────
+            if self._ml_ready and self._ensemble is not None:
+                try:
+                    ensemble_pred: "EnsemblePrediction" = await self._ensemble.predict(
+                        watershed=watershed,
+                        horizon_hours=hours_ahead,
+                    )
+                    predicted_flow = ensemble_pred.ensemble_discharge_cfs
+                    predicted_risk = ensemble_pred.ensemble_risk_score
+                    confidence = ensemble_pred.ensemble_confidence
+                    methodology = "ML Ensemble (LSTM/GRU/Transformer/RF)"
+                    model_details = [
+                        {
+                            "model": p.model_name,
+                            "discharge_cfs": p.predicted_discharge_cfs,
+                            "risk_score": p.predicted_risk_score,
+                            "confidence": p.confidence,
+                        }
+                        for p in ensemble_pred.model_predictions
+                    ]
+                    model_agreement = ensemble_pred.model_agreement
+
+                    return {
+                        'watershed_name': watershed.get('name', 'Unknown'),
+                        'watershed_id': watershed.get('id'),
+                        'current_conditions': {
+                            'flow_cfs': current_flow,
+                            'risk_score': current_risk,
+                        },
+                        'predicted_conditions': {
+                            'flow_cfs': predicted_flow,
+                            'risk_score': predicted_risk,
+                            'risk_level': self._risk_score_to_level(predicted_risk),
+                        },
+                        'confidence': confidence,
+                        'model_agreement': model_agreement,
+                        'methodology': methodology,
+                        'model_predictions': model_details,
+                        'prediction_factors': {
+                            'trend_rate': trend_rate,
+                            'data_age_hours': self._get_data_age(watershed),
+                            'trend_stability': self._assess_trend_stability(watershed),
+                            'ml_models_used': [p.model_name for p in ensemble_pred.model_predictions],
+                        },
+                    }
+                except Exception as ml_err:
+                    logger.warning(f"ML prediction failed for {watershed.get('name')}, "
+                                   f"using rule-based fallback: {ml_err}")
+
+            # ── Rule-based fallback (original logic, always available) ────
             predicted_flow = current_flow + (trend_rate * hours_ahead)
-            
-            # Account for trend decay
-            decay_factor = math.exp(-hours_ahead / 24)  # Trend weakens over time
+            decay_factor = math.exp(-hours_ahead / 24)
             predicted_flow = current_flow + (predicted_flow - current_flow) * decay_factor
-            
-            # Predict risk score based on flow
-            flood_stage = watershed.get('flood_stage_cfs', predicted_flow * 2)
+            predicted_flow = max(0.0, predicted_flow)
+
             flow_ratio = predicted_flow / flood_stage if flood_stage > 0 else 0
-            predicted_risk = min(10, flow_ratio * 8 + current_risk * 0.2)
-            
-            # Calculate confidence based on data quality and trend stability
+            predicted_risk = min(10.0, flow_ratio * 8 + current_risk * 0.2)
+
             data_age = self._get_data_age(watershed)
             trend_stability = self._assess_trend_stability(watershed)
-            
             confidence = 0.9
-            if data_age > 2:  # Hours
+            if data_age > 2:
                 confidence *= 0.8
             if trend_stability < 0.7:
                 confidence *= 0.9
             if hours_ahead > 24:
                 confidence *= 0.8
-            
+
             return {
                 'watershed_name': watershed.get('name', 'Unknown'),
                 'watershed_id': watershed.get('id'),
                 'current_conditions': {
                     'flow_cfs': current_flow,
-                    'risk_score': current_risk
+                    'risk_score': current_risk,
                 },
                 'predicted_conditions': {
                     'flow_cfs': predicted_flow,
                     'risk_score': predicted_risk,
-                    'risk_level': self._risk_score_to_level(predicted_risk)
+                    'risk_level': self._risk_score_to_level(predicted_risk),
                 },
                 'confidence': confidence,
+                'model_agreement': 1.0,
+                'methodology': 'Rule-Based Exponential Decay (fallback)',
+                'model_predictions': [],
                 'prediction_factors': {
                     'trend_rate': trend_rate,
                     'data_age_hours': data_age,
-                    'trend_stability': trend_stability
-                }
+                    'trend_stability': trend_stability,
+                    'ml_models_used': [],
+                },
             }
-        
+
         except Exception as e:
             logger.error(f"Error predicting watershed conditions: {e}")
             return {}
@@ -420,35 +510,86 @@ class PredictorAgent(BaseAgent):
             return None
     
     async def _assess_trend_prediction_accuracy(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Assess accuracy of trend predictions"""
+        """
+        Assess accuracy of trend predictions using real validation metrics.
+
+        Method:
+        1. If ValidationEngine has run, use the NSE for the rule_based model at 24h
+           as a proxy for trend prediction accuracy (NSE measures how well we capture
+           the temporal pattern, not just the magnitude).
+        2. Otherwise, compare the direction of past predictions against current actuals
+           from prediction_history.
+        3. Fall back to data-quality heuristic if neither is available.
+        """
         try:
-            # This would analyze how well the model predicts trends
-            # For now, return simulated values
-            
-            score = 82.0  # Base accuracy
-            performance = "Good"
-            
-            # Adjust based on recent validation data
-            if hasattr(self, '_recent_trend_accuracy'):
-                score = self._recent_trend_accuracy
-                
-            if score >= 85:
-                performance = "Excellent"
-            elif score >= 75:
-                performance = "Good"
-            elif score >= 65:
-                performance = "Fair"
+            # ── Method 1: use real validation NSE if available ───────────────
+            if self._validation_metrics:
+                rb_24h = self._validation_metrics.get("rule_based", {}).get("24", {})
+                lstm_24h = self._validation_metrics.get("lstm", {}).get("24", {})
+                best = lstm_24h if lstm_24h else rb_24h
+                nse = best.get("nse", None)
+                if nse is not None:
+                    # NSE ranges -inf to 1; map to 0–100% accuracy display
+                    score = round(max(0.0, min(100.0, (nse + 0.2) / 1.2 * 100)), 1)
+                    performance = (
+                        "Excellent" if score >= 88 else
+                        "Good"      if score >= 75 else
+                        "Fair"      if score >= 60 else "Poor"
+                    )
+                    return {"score": score, "recent_performance": performance,
+                            "metric": "NSE", "source": "validation_engine"}
+
+            # ── Method 2: direction accuracy from prediction_history ─────────
+            if len(self.prediction_history) >= 3:
+                correct = 0
+                total   = 0
+                current_ws = {w['name']: w
+                              for w in data.get('watersheds', [])}
+                for past_pred in self.prediction_history[-10:]:
+                    for wf in past_pred['forecast'].get('watersheds_forecast', []):
+                        name = wf.get('watershed_name', '')
+                        actual_ws = current_ws.get(name)
+                        if not actual_ws:
+                            continue
+                        pred_trend  = wf.get('predicted_conditions', {}).get('risk_score', 0)
+                        actual_risk = float(actual_ws.get('risk_score', 0))
+                        pred_dir    = pred_trend > 5.0
+                        actual_dir  = actual_risk > 5.0
+                        if pred_dir == actual_dir:
+                            correct += 1
+                        total += 1
+                if total > 0:
+                    score = round(correct / total * 100, 1)
+                    performance = (
+                        "Excellent" if score >= 85 else
+                        "Good"      if score >= 70 else
+                        "Fair"      if score >= 55 else "Poor"
+                    )
+                    self._recent_trend_accuracy = score
+                    return {"score": score, "recent_performance": performance,
+                            "metric": "direction_accuracy", "source": "prediction_history"}
+
+            # ── Method 3: data-quality heuristic ────────────────────────────
+            watersheds = data.get('watersheds', [])
+            if watersheds:
+                fresh = sum(1 for w in watersheds if self._get_data_age(w) < 2)
+                openmeteo = sum(1 for w in watersheds if w.get('data_source') == 'openmeteo')
+                q = (fresh / len(watersheds)) * 0.6 + (openmeteo / len(watersheds)) * 0.4
+                score = round(65 + q * 25, 1)
             else:
-                performance = "Poor"
-            
-            return {
-                'score': score,
-                'recent_performance': performance
-            }
-        
+                score = 72.0
+            performance = (
+                "Excellent" if score >= 85 else
+                "Good"      if score >= 72 else
+                "Fair"      if score >= 58 else "Poor"
+            )
+            return {"score": score, "recent_performance": performance,
+                    "metric": "data_quality_proxy", "source": "heuristic"}
+
         except Exception as e:
             logger.error(f"Error assessing trend accuracy: {e}")
-            return {'score': 75.0, 'recent_performance': 'Fair'}
+            return {'score': 72.0, 'recent_performance': 'Fair',
+                    'metric': 'fallback', 'source': 'error'}
     
     async def _detect_adverse_predictions(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Detect high-confidence predictions of adverse conditions"""
@@ -501,29 +642,144 @@ class PredictorAgent(BaseAgent):
             return {'accuracy_drop': 0, 'timeframe': None}
     
     async def _detect_prediction_conflicts(self, data: Dict[str, Any]) -> List[str]:
-        """Detect conflicts between different prediction models"""
+        """
+        Detect conflicts between ML model predictions.
+        A conflict exists when model_agreement < 0.6 for a high-risk watershed.
+        """
         try:
-            # This would compare predictions from different models
-            # For now, simulate occasional conflicts
-            
-            import random
-            if random.random() < 0.05:  # 5% chance of conflicts
-                return ['Brahmaputra at Guwahati', 'Ganga at Patna']
-            
-            return []
-        
+            watersheds = data.get('watersheds', [])
+            conflicts = []
+
+            if self._ml_ready and self._ensemble is not None:
+                for ws in watersheds:
+                    if float(ws.get('risk_score') or 0) < 4.0:
+                        continue   # only check risky sites
+                    try:
+                        pred = await self._ensemble.predict(ws, horizon_hours=24)
+                        if pred.model_agreement < 0.6 and len(pred.model_predictions) >= 2:
+                            conflicts.append(ws.get('name', 'Unknown'))
+                    except Exception:
+                        pass
+
+            return conflicts
+
         except Exception as e:
             logger.error(f"Error detecting prediction conflicts: {e}")
             return []
-    
-    def _calculate_prediction_accuracy(self, prediction: Dict[str, Any], current_data: Dict[str, Any]) -> Optional[float]:
-        """Calculate accuracy of a historical prediction"""
+
+    # ------------------------------------------------------------------
+    # ML initialisation helpers
+    # ------------------------------------------------------------------
+
+    async def _ensure_ml_ready(self) -> None:
+        """
+        Initialise the ML ensemble asynchronously on first call.
+        Auto-trains with synthetic data if no checkpoints found.
+        Never raises — falls back gracefully.
+        """
+        if self._ml_ready or not _ML_AVAILABLE:
+            return
         try:
-            # This would compare predicted vs actual conditions
-            # For now, return simulated accuracy
-            import random
-            return 75 + random.random() * 20  # 75-95% accuracy
-        
+            self._ensemble = get_ensemble()
+            if not self._ensemble.models_trained():
+                logger.info("No ML checkpoints found — starting background training...")
+                # Run training in background so agent doesn't block startup
+                asyncio.create_task(self._background_train())
+            else:
+                logger.info(f"ML ensemble ready: {self._ensemble.models_available()}")
+                self._ml_ready = True
+                await self._refresh_validation_metrics()
+        except Exception as e:
+            logger.warning(f"ML ensemble init failed: {e}")
+            self._ml_ready = False
+
+    async def _background_train(self) -> None:
+        """Train ML models in the background (runs once after startup)."""
+        try:
+            logger.info("Background ML training started...")
+            await self._ensemble.train_all(epochs=30)   # lighter for first boot
+            self._ml_ready = True
+            logger.info("Background ML training complete — ensemble is now active")
+            await self._refresh_validation_metrics()
+        except Exception as e:
+            logger.error(f"Background ML training failed: {e}")
+
+    async def _refresh_validation_metrics(self) -> None:
+        """Load or compute validation metrics for the accuracy display."""
+        try:
+            if not _ML_AVAILABLE:
+                return
+            engine = get_validation_engine()
+            if not engine._results:
+                # Run lightweight validation (rule_based + random_forest only for speed)
+                await engine.run_validation(
+                    models=["lstm", "gru", "transformer", "random_forest", "rule_based"],
+                    horizons=[24],
+                    persist=False,
+                )
+            # Cache as {model: {horizon_str: metrics_dict}}
+            self._validation_metrics = {
+                model: {str(h): m.to_dict() for h, m in h_map.items()}
+                for model, h_map in engine._results.items()
+            }
+        except Exception as e:
+            logger.debug(f"Validation metrics refresh skipped: {e}")
+
+    def get_ml_status(self) -> Dict[str, Any]:
+        """Return current ML ensemble status for the research API."""
+        if not _ML_AVAILABLE:
+            return {"available": False, "reason": "torch/sklearn not installed"}
+        if self._ensemble is None:
+            return {"available": False, "reason": "not initialised yet"}
+        return {
+            "available": True,
+            "ready": self._ml_ready,
+            "models_trained": self._ensemble.models_trained(),
+            "models_available": self._ensemble.models_available(),
+            "training_summary": self._ensemble.get_training_summary(),
+            "validation_metrics": self._validation_metrics,
+        }
+
+    def _calculate_prediction_accuracy(self, prediction: Dict[str, Any], current_data: Dict[str, Any]) -> Optional[float]:
+        """
+        Calculate accuracy of a historical prediction.
+
+        Uses real ValidationEngine metrics when available (RMSE-based accuracy
+        expressed as a percentage).  Falls back to comparing stored predicted
+        vs current actual values when no validation data exists.
+        """
+        try:
+            # Try to get real validation metrics from cache
+            if self._validation_metrics:
+                # Use LSTM 24h NSE as accuracy proxy (NSE 0-1 → 0-100%)
+                lstm_metrics = self._validation_metrics.get("lstm", {}).get("24", {})
+                if lstm_metrics:
+                    nse = lstm_metrics.get("nse", 0.0)
+                    # Convert NSE to an accuracy-like percentage (capped 0-100)
+                    return round(max(0.0, min(100.0, nse * 100)), 1)
+
+            # Fallback: compare predicted vs actual for watersheds in current data
+            forecast_data = prediction.get('forecast', {})
+            ws_forecasts = forecast_data.get('watersheds_forecast', [])
+            current_ws = {w['name']: w for w in current_data.get('watersheds', [])}
+
+            errors = []
+            for wf in ws_forecasts:
+                name = wf.get('watershed_name', '')
+                predicted_flow = wf.get('predicted_conditions', {}).get('flow_cfs', 0)
+                actual = current_ws.get(name, {})
+                actual_flow = float(actual.get('current_streamflow_cfs') or 0)
+                if predicted_flow > 0 and actual_flow > 0:
+                    rel_error = abs(predicted_flow - actual_flow) / max(actual_flow, 1)
+                    errors.append(rel_error)
+
+            if errors:
+                mean_rel_error = sum(errors) / len(errors)
+                return round(max(0.0, min(100.0, (1.0 - mean_rel_error) * 100)), 1)
+
+            # Last resort: return None so the caller uses the default
+            return None
+
         except Exception as e:
             logger.error(f"Error calculating prediction accuracy: {e}")
             return None
@@ -543,10 +799,35 @@ class PredictorAgent(BaseAgent):
             return 24.0
     
     def _assess_trend_stability(self, watershed: Dict[str, Any]) -> float:
-        """Assess stability of the trend (0-1)"""
-        # This would analyze trend consistency over time
-        # For now, return a reasonable default
-        return 0.8
+        """
+        Assess trend stability (0–1) using actual trend_rate and risk_score history.
+
+        Logic:
+        - trend_rate near 0 → stable (high score)
+        - large positive trend_rate relative to flood_stage → unstable (low score)
+        - data freshness penalty for stale watersheds
+        """
+        try:
+            flow       = float(watershed.get('current_streamflow_cfs') or 0)
+            flood_stage = float(watershed.get('flood_stage_cfs') or max(flow * 2, 1))
+            trend_rate = float(watershed.get('trend_rate_cfs_per_hour') or 0)
+
+            # Normalise trend rate relative to flood stage
+            # ±200 CFS/hr on a 100k CFS flood stage = very stable
+            # ±5000 CFS/hr on a 100k CFS flood stage = very unstable
+            norm_trend = abs(trend_rate) / max(flood_stage * 0.01, 1.0)
+            stability = max(0.0, min(1.0, 1.0 - norm_trend * 0.1))
+
+            # Penalise stale data
+            age_h = self._get_data_age(watershed)
+            if age_h > 6:
+                stability *= 0.75
+            elif age_h > 2:
+                stability *= 0.90
+
+            return round(stability, 3)
+        except Exception:
+            return 0.75
     
     def _risk_score_to_level(self, risk_score: float) -> str:
         """Convert risk score to risk level"""

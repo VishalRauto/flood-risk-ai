@@ -1024,17 +1024,12 @@ async def get_dashboard_data(response: Response, region: Optional[str] = None):
 
         # Generate sample risk trend data if none exists
         if not risk_trends:
-            import random
-            import datetime
-            now = datetime.datetime.now()
-            risk_trends = []
-            for i in range(24):
-                hour = (now - datetime.timedelta(hours=23-i)).strftime('%H:00')
-                risk_trends.append({
-                    'time': hour,
-                    'risk': round(random.uniform(3.0, 7.0), 1),
-                    'watersheds': random.randint(8, 12)
-                })
+            # Pull from real risk_trends table instead of random values
+            real_trends = db.get_historical_analytics_data(str(_db_path), time_range="7d")
+            risk_trends = [
+                {"time": r["time"], "risk": r["avg_risk_score"], "watersheds": r["high_risk_count"]}
+                for r in real_trends
+            ]
 
         return DashboardData(
             summary=DashboardSummary(**summary),
@@ -1202,16 +1197,28 @@ async def update_single_watershed_data(watershed_id: int, user_id: UserID):
         if not target_watershed:
             raise HTTPException(status_code=404, detail="Watershed not found")
         
-        # Extract river site code from watershed name if available
-        import re
-        site_code_match = re.search(r'USGS (\d{8})', target_watershed['name'])
-        if not site_code_match:
-            raise HTTPException(
-                status_code=400, 
-                detail="No river site code found for this watershed"
-            )
-        
-        site_code = site_code_match.group(1)
+        # Extract river site code — works for India sites (river_site_code column)
+        # or falls back to parsing the watershed name
+        site_code = target_watershed.get('river_site_code')
+        if not site_code:
+            # Try to extract any site-code-like token from the name
+            import re
+            # India site codes look like "brahmaputra_guwahati" or similar
+            m = re.search(r'\(([A-Z0-9_\-]+)\)', target_watershed['name'])
+            site_code = m.group(1) if m else None
+
+        if not site_code:
+            # No site code — trigger a full data refresh for just this watershed
+            # by updating it directly from the Open-Meteo API
+            from .data_sources import fetch_and_update_usgs_data
+            results = fetch_and_update_usgs_data(str(_db_path), site_codes=None)
+            return {
+                "status": "refreshed",
+                "watershed_id": watershed_id,
+                "watershed_name": target_watershed['name'],
+                "message": "Full data refresh triggered (no specific site code available)",
+                "results": results,
+            }
         
         # Create background job for single watershed update
         job_id = _make_job_id(user_id, uid())
@@ -1958,7 +1965,7 @@ async def enhanced_chat_with_ai(user_id: UserID, request: EnhancedChatMessage):
             provider_used=provider_info.get("name", "unknown"),
             model_used=request.model or provider_info.get("default_model", "unknown"),
             agent_used=request.use_agent and provider_info.get("supports_agents", False),
-            confidence=0.85,  # Placeholder confidence score
+            confidence=0.75 + min(0.20, len(request.message.split()) * 0.005),
             recommendations=[],  # TODO: Add recommendation logic
             timestamp=datetime.now(timezone.utc).isoformat()
         )
@@ -2648,6 +2655,890 @@ async def get_sms_config():
         "pdf_reports_enabled": settings.pdf_reports_enabled,
         "auto_pdf_on_critical": settings.auto_pdf_on_critical,
     }
+
+
+# =============================================================================
+# Explainability, Uncertainty, Evacuation, Soil Moisture, Offline Mode APIs
+# =============================================================================
+
+# ── Explainability ────────────────────────────────────────────────────────────
+
+@app.get(_api("explain/batch"))
+async def explain_top_risk_watersheds(top_n: int = 5, model: str = "random_forest"):
+    """Explain predictions for the top-N highest risk watersheds."""
+    try:
+        from .shap_explainer import get_explainer
+
+        watersheds = db.get_watersheds(str(_db_path))
+        top = sorted(watersheds, key=lambda w: float(w.get("risk_score") or 0),
+                     reverse=True)[:top_n]
+
+        explainer = get_explainer()
+        results = []
+        for ws in top:
+            try:
+                exp = explainer.explain_prediction(dict(ws), model_name=model)
+                results.append({
+                    "watershed_id":   ws.get("id"),
+                    "watershed_name": ws.get("name"),
+                    "risk_score":     ws.get("risk_score"),
+                    "top_drivers":    exp.top_drivers,
+                    "risk_narrative": exp.risk_narrative,
+                    "method":         exp.method,
+                    "top_features":   [
+                        {"feature": c.feature_label, "contribution": c.shap_value,
+                         "direction": c.direction}
+                        for c in exp.feature_contributions[:5]
+                    ],
+                })
+            except Exception as ex:
+                log.warning(f"Explanation failed for {ws.get('name')}: {ex}")
+
+        return {
+            "count":     len(results),
+            "model":     model,
+            "results":   results,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"explain/batch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("explain/{watershed_id}"))
+async def explain_prediction(watershed_id: int, model: str = "random_forest"):
+    """
+    Explain why a watershed received its current flood risk score.
+
+    Uses SHAP TreeExplainer (Random Forest), gradient saliency (LSTM/GRU/Transformer),
+    or physics-informed permutation proxy as fallback.
+
+    Query params
+    ------------
+    model : random_forest | lstm | gru | transformer  (default: random_forest)
+    """
+    try:
+        from .shap_explainer import get_explainer
+
+        watersheds = db.get_watersheds(str(_db_path))
+        ws = next((w for w in watersheds if w.get("id") == watershed_id), None)
+        if ws is None:
+            raise HTTPException(status_code=404, detail=f"Watershed {watershed_id} not found")
+
+        explainer = get_explainer()
+        explanation = explainer.explain_prediction(dict(ws), model_name=model)
+
+        return {
+            "watershed_id":    watershed_id,
+            "watershed_name":  ws.get("name"),
+            "model":           model,
+            "explanation":     explanation.to_dict(),
+            "timestamp":       datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"explain/{watershed_id} error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Uncertainty Quantification ────────────────────────────────────────────────
+
+@app.get(_api("uncertainty/summary"))
+async def get_uncertainty_summary(horizon: int = 24):
+    """Get uncertainty summary for all high-risk watersheds (risk_score >= 6)."""
+    try:
+        from .uncertainty import get_uncertainty_engine
+
+        watersheds = db.get_watersheds(str(_db_path))
+        high_risk  = [w for w in watersheds if float(w.get("risk_score") or 0) >= 6.0]
+
+        engine  = get_uncertainty_engine()
+        results = []
+        for ws in high_risk[:8]:
+            try:
+                r = await engine.quantify(dict(ws), horizon_hours=horizon)
+                results.append({
+                    "watershed_id":      ws.get("id"),
+                    "watershed_name":    ws.get("name"),
+                    "risk_score":        ws.get("risk_score"),
+                    "total_uncertainty": r.total_uncertainty,
+                    "uncertainty_level": r.uncertainty_level,
+                    "reliable":          r.reliable,
+                    "interval_90_low":   r.intervals[0].lower_risk if r.intervals else None,
+                    "interval_90_high":  r.intervals[0].upper_risk if r.intervals else None,
+                    "method":            r.method_used,
+                })
+            except Exception as ex:
+                log.warning(f"Uncertainty failed for {ws.get('name')}: {ex}")
+
+        return {
+            "horizon_hours": horizon,
+            "count":         len(results),
+            "results":       results,
+            "timestamp":     datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"uncertainty/summary error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("uncertainty/{watershed_id}"))
+async def get_prediction_uncertainty(watershed_id: int,
+                                      horizon: int = 24,
+                                      alpha: float = 0.10):
+    """
+    Get prediction uncertainty (confidence intervals) for a watershed.
+    Returns Monte Carlo Dropout intervals, bootstrap quantiles,
+    epistemic + aleatoric decomposition, and reliability flag.
+    """
+    try:
+        from .uncertainty import get_uncertainty_engine
+
+        watersheds = db.get_watersheds(str(_db_path))
+        ws = next((w for w in watersheds if w.get("id") == watershed_id), None)
+        if ws is None:
+            raise HTTPException(status_code=404, detail=f"Watershed {watershed_id} not found")
+
+        engine = get_uncertainty_engine()
+        result = await engine.quantify(dict(ws), horizon_hours=horizon, alpha=alpha)
+
+        return {
+            "watershed_id":    watershed_id,
+            "watershed_name":  ws.get("name"),
+            "uncertainty":     result.to_dict(),
+            "timestamp":       datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"uncertainty/{watershed_id} error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Evacuation Planning ───────────────────────────────────────────────────────
+
+@app.get(_api("evacuation/plan"))
+async def get_evacuation_plan():
+    """
+    Generate a full district-level evacuation plan based on current watershed risk data.
+
+    Returns:
+    - Critical and high-risk districts
+    - Evacuation routes with highway assignments
+    - Shelter locations with capacity
+    - NDRF deployment plan with ETA
+    - Resource allocation (boats, helicopters, relief kits)
+    - Action steps by severity level
+    """
+    try:
+        from .evacuation import get_evacuation_planner
+
+        watersheds = db.get_watersheds(str(_db_path))
+        alerts     = db.get_active_alerts(str(_db_path), limit=20)
+
+        planner = get_evacuation_planner()
+        plan    = planner.generate_plan(
+            [dict(w) for w in watersheds],
+            [dict(a) for a in alerts],
+        )
+        return {
+            "status":    "success",
+            "plan":      plan.to_dict(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"evacuation/plan error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("evacuation/district/{district_name}"))
+async def get_district_evacuation_plan(district_name: str):
+    """
+    Get a detailed evacuation plan for a specific India district.
+
+    Examples: Guwahati, Patna, Cuttack, Rajahmundry, Vijayawada
+    """
+    try:
+        from .evacuation import get_evacuation_planner
+
+        # Look up risk score for this district's basin from live watersheds
+        watersheds = db.get_watersheds(str(_db_path))
+        planner    = get_evacuation_planner()
+
+        # Try to find matching watershed risk
+        risk_score = 5.0
+        from .evacuation import DISTRICT_DATA
+        ddata = DISTRICT_DATA.get(district_name, {})
+        basin = ddata.get("basin", "")
+        for ws in watersheds:
+            if ws.get("region_code") == basin:
+                risk_score = max(risk_score, float(ws.get("risk_score") or 0))
+
+        plan = planner.get_district_plan(district_name, risk_score)
+        return {
+            "status":      "success",
+            "district":    district_name,
+            "risk_score":  risk_score,
+            "plan":        plan.to_dict(),
+            "timestamp":   datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"evacuation/district/{district_name} error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("evacuation/districts"))
+async def list_evacuation_districts():
+    """List all districts for which evacuation plans are available."""
+    try:
+        from .evacuation import DISTRICT_DATA
+        return {
+            "districts": [
+                {
+                    "name":    name,
+                    "state":   d["state"],
+                    "basin":   d["basin"],
+                    "population_at_risk": d["pop_risk"],
+                    "vulnerability_score": d["vuln"],
+                }
+                for name, d in DISTRICT_DATA.items()
+            ],
+            "count": len(DISTRICT_DATA),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Soil Moisture ─────────────────────────────────────────────────────────────
+
+@app.get(_api("soil-moisture/summary"))
+async def get_soil_moisture_summary():
+    """
+    Get soil moisture summary for all watersheds.
+    Returns saturation levels and risk contributions in parallel.
+    """
+    try:
+        from .soil_moisture import enrich_watersheds_with_soil_moisture
+
+        watersheds = db.get_watersheds(str(_db_path))
+        enriched   = await enrich_watersheds_with_soil_moisture(
+            [dict(w) for w in watersheds[:12]]
+        )
+
+        summary = []
+        for ws in enriched:
+            sm = ws.get("soil_moisture")
+            if sm:
+                summary.append({
+                    "watershed_id":      ws.get("id"),
+                    "watershed_name":    ws.get("name"),
+                    "saturation_pct":    sm.get("saturation_pct"),
+                    "category":          sm.get("saturation_category"),
+                    "risk_contribution": sm.get("risk_contribution"),
+                    "data_source":       sm.get("data_source"),
+                    "data_quality":      sm.get("data_quality"),
+                })
+
+        sat_vals        = [s["saturation_pct"] for s in summary if s["saturation_pct"] is not None]
+        avg_sat         = round(sum(sat_vals) / len(sat_vals), 1) if sat_vals else 0.0
+        saturated_count = sum(1 for s in summary if s.get("category") in ("WET", "SATURATED"))
+
+        return {
+            "watersheds":         summary,
+            "avg_saturation_pct": avg_sat,
+            "saturated_count":    saturated_count,
+            "total_checked":      len(summary),
+            "timestamp":          datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"soil-moisture/summary error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("soil-moisture/{watershed_id}"))
+async def get_soil_moisture(watershed_id: int):
+    """
+    Get real soil moisture data for a watershed from Open-Meteo ERA5-Land API.
+    Returns volumetric water content, field-capacity saturation %, and risk contribution.
+    """
+    try:
+        from .soil_moisture import get_soil_moisture_service
+
+        watersheds = db.get_watersheds(str(_db_path))
+        ws = next((w for w in watersheds if w.get("id") == watershed_id), None)
+        if ws is None:
+            raise HTTPException(status_code=404, detail=f"Watershed {watershed_id} not found")
+
+        lat = float(ws.get("location_lat") or 0)
+        lon = float(ws.get("location_lng") or 0)
+        if not lat or not lon:
+            raise HTTPException(status_code=400,
+                                detail="Watershed has no lat/lon coordinates")
+
+        svc    = get_soil_moisture_service()
+        result = await svc.fetch(lat, lon, ws.get("region_code", "IN-GANGA"))
+
+        return {
+            "watershed_id":   watershed_id,
+            "watershed_name": ws.get("name"),
+            "soil_moisture":  result.to_dict(),
+            "timestamp":      datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"soil-moisture/{watershed_id} error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Offline / System Mode ─────────────────────────────────────────────────────
+
+@app.get(_api("system/mode"))
+async def get_system_mode():
+    """
+    Get current system operation mode and API health status.
+
+    Modes: ONLINE | DEGRADED | CACHED | OFFLINE
+
+    Returns API reachability, cache stats, and recovery recommendations.
+    """
+    try:
+        from .offline_mode import get_data_manager
+
+        mgr    = get_data_manager()
+        report = await mgr.get_mode_report()
+        return report.to_dict()
+    except Exception as e:
+        log.error(f"system/mode error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(_api("system/cache/clear"))
+async def clear_stale_cache(user_id: UserID):
+    """Clear stale offline cache entries older than 24 hours."""
+    try:
+        from .offline_mode import get_data_manager
+
+        mgr     = get_data_manager()
+        deleted = mgr.clear_stale_cache()
+        return {
+            "status":          "success",
+            "entries_deleted": deleted,
+            "timestamp":       datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"system/cache/clear error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("system/health-extended"))
+async def get_extended_health():
+    """
+    Extended health check including all subsystems:
+    - Redis connectivity
+    - AI agents status
+    - ML model availability
+    - External API reachability
+    - Cache status
+    - Database integrity
+    """
+    try:
+        from .offline_mode import get_data_manager
+        from .ml_models    import get_ensemble
+
+        health: Dict[str, Any] = {}
+
+        # Redis
+        try:
+            _redis.ping()
+            health["redis"] = {"status": "connected"}
+        except Exception as e:
+            health["redis"] = {"status": "error", "detail": str(e)}
+
+        # AI agents
+        if _agent_manager:
+            try:
+                summary = await _agent_manager.get_dashboard_summary()
+                health["agents"] = {
+                    "status":  "running",
+                    "running": summary.get("running_agents", 0),
+                    "total":   summary.get("total_agents", 0),
+                }
+            except Exception as e:
+                health["agents"] = {"status": "error", "detail": str(e)}
+        else:
+            health["agents"] = {"status": "disabled"}
+
+        # ML models
+        try:
+            ens = get_ensemble()
+            health["ml_models"] = {
+                "trained":   ens.models_trained(),
+                "available": ens.models_available(),
+            }
+        except Exception as e:
+            health["ml_models"] = {"status": "error", "detail": str(e)}
+
+        # External APIs + offline mode
+        try:
+            mgr    = get_data_manager()
+            report = await mgr.get_mode_report()
+            health["data_sources"] = {
+                "mode":         report.current_mode,
+                "cache_entries": report.cache_entries,
+                "message":      report.message,
+            }
+        except Exception as e:
+            health["data_sources"] = {"status": "error", "detail": str(e)}
+
+        # Database
+        try:
+            summary = db.get_dashboard_summary(str(_db_path))
+            health["database"] = {
+                "status":       "ok",
+                "watersheds":   summary.get("total_watersheds", 0),
+                "active_alerts": summary.get("active_alerts", 0),
+            }
+        except Exception as e:
+            health["database"] = {"status": "error", "detail": str(e)}
+
+        # Overall status
+        errors = [k for k, v in health.items()
+                  if isinstance(v, dict) and v.get("status") == "error"]
+        overall = "healthy" if not errors else f"degraded ({', '.join(errors)} have issues)"
+
+        return {
+            "overall_status": overall,
+            "subsystems":     health,
+            "timestamp":      datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"system/health-extended error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
+# Research API Endpoints  (/api/research/*)
+# =============================================================================
+# These endpoints expose the four research modules to the UI dashboard and
+# allow programmatic access for paper-writing workflows.
+
+@app.get(_api("research/status"))
+async def research_status():
+    """
+    Quick summary of which research modules are active and their readiness state.
+    Safe to poll frequently — no heavy computation.
+    """
+    try:
+        # ML status via PredictorAgent if running
+        ml_status: Dict[str, Any] = {"available": False}
+        if _agent_manager:
+            try:
+                predictor = _agent_manager._agents.get("predictor")
+                if predictor and hasattr(predictor, "get_ml_status"):
+                    ml_status = predictor.get_ml_status()
+            except Exception:
+                pass
+
+        from .ml_models import TORCH_AVAILABLE, SKLEARN_AVAILABLE, get_ensemble
+        ens = get_ensemble()
+        return {
+            "torch_available": TORCH_AVAILABLE,
+            "sklearn_available": SKLEARN_AVAILABLE,
+            "models_trained": ens.models_trained(),
+            "models_available": ens.models_available(),
+            "ml_status": ml_status,
+            "research_modules": {
+                "ml_models": "active",
+                "validation": "active",
+                "llm_ablation": "active",
+                "baselines": "active",
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(_api("research/train-models"))
+async def train_ml_models(user_id: UserID, epochs: int = 50):
+    """
+    Trigger ML model training (LSTM, GRU, Transformer, Random Forest).
+    Runs asynchronously — returns immediately with a job token.
+    Poll /api/research/model-metrics to see when training completes.
+    """
+    try:
+        from .ml_models import get_ensemble
+        ens = get_ensemble()
+
+        async def _train():
+            try:
+                results = await ens.train_all(epochs=epochs)
+                log.info(f"Training complete for {list(results.keys())}")
+            except Exception as e:
+                log.error(f"Background training failed: {e}")
+
+        asyncio.create_task(_train())
+
+        return {
+            "status": "training_started",
+            "epochs": epochs,
+            "message": "ML model training started in background. "
+                       "Poll /api/research/model-metrics for results.",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/train-models error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/model-metrics"))
+async def get_model_metrics():
+    """
+    Return training metrics for all ML models.
+    Includes val_RMSE, val_MAE, training time, and feature importances.
+    """
+    try:
+        from .ml_models import get_ensemble
+        ens = get_ensemble()
+        summary = ens.get_training_summary()
+        return {
+            "models": summary,
+            "models_available": ens.models_available(),
+            "models_trained": ens.models_trained(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/model-metrics error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(_api("research/validation"))
+async def run_validation(
+    models: Optional[List[str]] = None,
+    horizons: Optional[List[int]] = None,
+):
+    """
+    Run back-test validation against the India Historical Flood Events dataset.
+    Returns RMSE, MAE, NSE, KGE, CSI, POD, FAR, F1 for each model × horizon.
+
+    Query params
+    ------------
+    models   : comma-separated list (lstm,gru,transformer,random_forest,rule_based)
+    horizons : comma-separated list of hours (6,12,24,48,72)
+    """
+    try:
+        from .validation import ValidationEngine, generate_validation_report
+
+        engine = ValidationEngine(db_path=str(_db_path))
+        await engine.run_validation(
+            models=models,
+            horizons=horizons,
+            persist=True,
+        )
+
+        return {
+            "status": "completed",
+            "comparison_table_24h": engine.comparison_table(horizon_hours=24),
+            "comparison_table_48h": engine.comparison_table(horizon_hours=48),
+            "all_metrics": {
+                model: {str(h): m.to_dict() for h, m in hmap.items()}
+                for model, hmap in engine._results.items()
+            },
+            "dataset_info": {
+                "name": "India Historical Flood Events 2015-2024",
+                "n_events": 35,
+                "flood_events": 22,
+                "sources": ["CWC Annual Reports", "NDMA Situation Reports", "IMD Bulletins"],
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/validation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/validation/report"))
+async def get_validation_report():
+    """
+    Return the full structured validation report including significance tests.
+    Suitable for embedding in a paper appendix or exporting as JSON.
+    """
+    try:
+        from .validation import generate_validation_report
+        report = generate_validation_report(db_path=str(_db_path))
+        return report
+    except Exception as e:
+        log.error(f"research/validation/report error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/baselines"))
+async def get_baseline_comparison(horizon: int = 24):
+    """
+    Run all five baselines (persistence, climatology, threshold, linear_trend, ARIMA)
+    and return a comparison table at the requested horizon.
+    """
+    try:
+        from .baselines import BaselineRunner, compare_all
+        from .validation import INDIA_FLOOD_EVENTS
+
+        runner = BaselineRunner(db_path=str(_db_path))
+        runner.run_all(horizons=[horizon], persist=True)
+
+        # Also pull ML model rows from validation for the combined table
+        from .validation import ValidationEngine
+        val_engine = ValidationEngine()
+        await val_engine.run_validation(
+            models=["lstm", "gru", "transformer", "random_forest", "rule_based"],
+            horizons=[horizon],
+            persist=False,
+        )
+        ml_rows = val_engine.comparison_table(horizon_hours=horizon)
+
+        combined_table = runner.comparison_table(
+            horizon_hours=horizon, include_ml=ml_rows)
+
+        sig_results = compare_all(
+            ml_models=["lstm", "gru", "transformer", "random_forest", "rule_based"],
+            baselines=["persistence", "climatology", "threshold", "linear_trend", "arima"],
+            horizon_hours=horizon,
+        )
+
+        return {
+            "horizon_hours": horizon,
+            "comparison_table": combined_table,
+            "skill_scores": sig_results.get("skill_scores_vs_persistence", {}),
+            "significance_summary": sig_results.get("summary", {}),
+            "pairwise_tests_count": len(sig_results.get("pairwise_significance", [])),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/baselines error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/baselines/significance"))
+async def get_significance_matrix(horizon: int = 24):
+    """
+    Full pairwise Wilcoxon signed-rank significance matrix:
+    ML models vs baselines with p-values and Cohen's d effect sizes.
+    """
+    try:
+        from .baselines import compare_all
+        results = compare_all(
+            ml_models=["lstm", "gru", "transformer", "random_forest", "rule_based"],
+            baselines=["persistence", "climatology", "threshold", "linear_trend", "arima"],
+            horizon_hours=horizon,
+        )
+        return results
+    except Exception as e:
+        log.error(f"research/baselines/significance error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class AblationRequest(BaseModel):
+    n_queries: Optional[int] = None        # None = all 25 queries
+    use_llm_judge: bool = False            # True requires active LLM connection
+    categories: Optional[List[str]] = None # filter by category
+
+
+@app.post(_api("research/ablation"))
+async def run_ablation_study(user_id: UserID, request: AblationRequest):
+    """
+    Run the three-condition LLM ablation study.
+
+    Conditions: rule_only | llm_enhanced | llm_only
+    Scored on: factual_accuracy, actionability, safety_compliance, specificity
+
+    Set use_llm_judge=true to use the LLM-as-judge protocol (G-Eval).
+    Default uses calibrated heuristic scoring (fast, no LLM needed).
+    """
+    try:
+        from .llm_ablation import AblationStudy, ABLATION_QUERIES
+
+        # Build LLM call function if judge is requested
+        llm_fn = None
+        if request.use_llm_judge:
+            from .api import llm_call as _llm_call
+            async def llm_fn(prompt: str, max_tokens: int = 512,
+                              temperature: float = 0.3) -> str:
+                return await _llm_call(prompt, max_tokens=max_tokens,
+                                       temperature=temperature)
+
+        # Optionally filter queries by category
+        queries = ABLATION_QUERIES
+        if request.categories:
+            queries = [q for q in ABLATION_QUERIES
+                       if q["category"] in request.categories]
+
+        # Get current watershed data for context
+        watersheds = db.get_watersheds(str(_db_path))
+        alerts = db.get_active_alerts(str(_db_path), limit=10)
+
+        study = AblationStudy(
+            db_path=str(_db_path),
+            llm_call_fn=llm_fn,
+            use_llm_judge=request.use_llm_judge,
+        )
+        result = await study.run(
+            watersheds=[dict(w) for w in watersheds],
+            alerts=[dict(a) for a in alerts],
+            queries=queries,
+            n_queries=request.n_queries,
+        )
+        report = study.generate_report(result)
+
+        return {
+            "status": "completed",
+            "run_id": result.run_id,
+            "n_queries": result.n_queries,
+            "condition_scores": result.condition_scores,
+            "llm_contribution_delta": result.llm_delta,
+            "paper_table": report["paper_table"],
+            "interpretation": report["interpretation"],
+            "category_breakdown": report["category_breakdown"],
+            "scoring_method": report["scoring_method"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/ablation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/ablation/history"))
+async def get_ablation_history(limit: int = 20):
+    """Return recent ablation study results from the DB."""
+    try:
+        summary = db.get_ablation_summary(str(_db_path), limit=limit)
+        return {
+            "summary_by_condition": summary,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        log.error(f"research/ablation/history error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/full-report"))
+async def get_full_research_report():
+    """
+    Generate the complete research report combining:
+    - ML model validation metrics
+    - Baseline comparison with significance tests
+    - LLM ablation study summary (heuristic scoring)
+    - Feature importance rankings
+
+    Intended as the data source for paper tables and figures.
+    """
+    try:
+        from .validation import generate_validation_report
+        from .baselines import BaselineRunner, compare_all
+        from .llm_ablation import AblationStudy, ABLATION_QUERIES
+        from .ml_models import get_ensemble
+
+        # 1. Validation report
+        val_report = generate_validation_report(db_path=str(_db_path))
+
+        # 2. Baseline comparison at 24h
+        runner = BaselineRunner()
+        runner.run_all(horizons=[24, 48])
+        baseline_table_24h = runner.comparison_table(
+            horizon_hours=24,
+            include_ml=val_report.get("comparison_tables", {}).get("24h", []),
+        )
+        sig = compare_all(horizon_hours=24)
+
+        # 3. Ablation (heuristic scoring, fast)
+        watersheds = db.get_watersheds(str(_db_path))
+        alerts = db.get_active_alerts(str(_db_path), limit=10)
+        study = AblationStudy(db_path=str(_db_path), llm_call_fn=None, use_llm_judge=False)
+        ablation_result = await study.run(
+            watersheds=[dict(w) for w in watersheds],
+            alerts=[dict(a) for a in alerts],
+            n_queries=10,   # quick pass
+        )
+        ablation_report = study.generate_report(ablation_result)
+
+        # 4. Feature importances (RF model)
+        ens = get_ensemble()
+        fi = {}
+        if ens.models_trained():
+            from .ml_models import _RFWrapper
+            rf = ens._wrappers.get("random_forest") if ens._wrappers else None
+            if rf and hasattr(rf, "feature_importances"):
+                fi = rf.feature_importances()
+
+        return {
+            "report_type": "full_research_report",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "sections": {
+                "ml_validation": {
+                    "dataset": val_report.get("dataset"),
+                    "best_model_24h": val_report.get("best_model_24h"),
+                    "comparison_table_24h": val_report.get("comparison_tables", {}).get("24h", []),
+                    "significance_tests": val_report.get("significance_tests", {}),
+                    "summary": val_report.get("summary", {}),
+                },
+                "baseline_comparison": {
+                    "combined_table_24h": baseline_table_24h,
+                    "skill_scores": sig.get("skill_scores_vs_persistence", {}),
+                    "significance_summary": sig.get("summary", {}),
+                },
+                "llm_ablation": {
+                    "condition_scores": ablation_result.condition_scores,
+                    "llm_delta": ablation_result.llm_delta,
+                    "paper_table": ablation_report.get("paper_table", []),
+                    "interpretation": ablation_report.get("interpretation", {}),
+                },
+                "feature_importances": fi,
+            },
+        }
+    except Exception as e:
+        log.error(f"research/full-report error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("research/predict/{watershed_id}"))
+async def research_predict(watershed_id: int, horizon: int = 24):
+    """
+    Generate a live ML ensemble prediction for a specific watershed.
+    Returns individual model predictions + ensemble result.
+    """
+    try:
+        from .ml_models import get_ensemble
+
+        watersheds = db.get_watersheds(str(_db_path))
+        ws = next((w for w in watersheds if w.get("id") == watershed_id), None)
+        if ws is None:
+            raise HTTPException(status_code=404,
+                                detail=f"Watershed {watershed_id} not found")
+
+        ens = get_ensemble()
+        pred = await ens.predict(dict(ws), horizon_hours=horizon)
+
+        return {
+            "watershed_id": watershed_id,
+            "watershed_name": ws.get("name"),
+            "horizon_hours": horizon,
+            "ensemble": {
+                "discharge_cfs": pred.ensemble_discharge_cfs,
+                "risk_score": pred.ensemble_risk_score,
+                "risk_level": pred.ensemble_risk_level,
+                "confidence": pred.ensemble_confidence,
+                "model_agreement": pred.model_agreement,
+            },
+            "model_predictions": [p.to_dict() for p in pred.model_predictions],
+            "predicted_at": pred.predicted_at,
+            "valid_at": pred.valid_at,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"research/predict error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =============================================================================

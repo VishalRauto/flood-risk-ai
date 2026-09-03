@@ -16,7 +16,6 @@ Addresses PDF recommendations:
 """
 
 import asyncio
-import random
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Set
 import logging
@@ -449,15 +448,31 @@ class EmergencyResponderAgent(BaseAgent):
         return {'population': population, 'districts': districts}
 
     def _detect_comm_failures(self) -> List[str]:
-        """Simulate communication failures in remote India areas."""
-        if random.random() < 0.08:
-            return random.sample([
-                "Northeast Himalayan foothills",
-                "Remote Assam districts",
-                "Coastal Odisha islands",
-                "Sundarbans delta area",
-            ], k=random.randint(1, 2))
-        return []
+        """
+        Detect real communication degradation based on data staleness.
+
+        A site is considered "comm-degraded" if its last_updated timestamp
+        is more than 3 hours old — indicating the telemetry feed has dropped.
+        This uses actual data freshness rather than random simulation.
+        """
+        degraded_areas: List[str] = []
+        try:
+            # Check active incident watersheds for staleness
+            for incident in self.active_incidents:
+                last_updated = incident.get('last_updated', '')
+                if not last_updated:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(last_updated.replace('Z', '+00:00'))
+                    age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+                    if age_hours > 3:
+                        area = incident.get('watershed', incident.get('name', 'Unknown area'))
+                        degraded_areas.append(f"{area} (data {age_hours:.0f}h old)")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return degraded_areas
 
     # =========================================================================
     # Readiness, comms, stats helpers

@@ -324,28 +324,127 @@ Return only a number between 1.0 and 10.0."""
             return 5.0
     
     async def _evaluate_context_relevance(
-        self, 
-        question: str, 
+        self,
+        question: str,
         retrieved_context: Optional[List[str]]
     ) -> float:
-        """Evaluate relevance of context to question"""
+        """
+        Evaluate relevance of retrieved context to the question.
+
+        Uses LLM judge when available; falls back to keyword-overlap heuristic
+        so the score is always meaningful rather than a hardcoded placeholder.
+        """
         if not retrieved_context:
             return 1.0
-        
-        # Similar implementation to retrieval quality
-        return 5.0  # Placeholder
-    
+
+        # ── Try LLM judge first ───────────────────────────────────────────
+        prompt = f"""You are evaluating a flood intelligence RAG system.
+
+Question asked: {question}
+
+Retrieved context snippets:
+{chr(10).join(f'[{i+1}] {c[:300]}' for i, c in enumerate(retrieved_context[:4]))}
+
+Rate how relevant these context snippets are to answering the question (1-10):
+- 9-10: All snippets are directly relevant with specific flood/river data
+- 7-8:  Most snippets relevant, some tangential information
+- 5-6:  Mixed relevance, some useful snippets
+- 3-4:  Mostly irrelevant to the specific question
+- 1-2:  No relevant information retrieved
+
+Return only a single number between 1.0 and 10.0."""
+
+        try:
+            response = await self._call_judge_model(prompt)
+            score = float(response.strip().split()[0])
+            return max(1.0, min(10.0, score))
+        except Exception:
+            pass
+
+        # ── Keyword-overlap heuristic fallback ───────────────────────────
+        import re
+        question_tokens = set(re.sub(r'[^\w\s]', '', question.lower()).split())
+        # Remove stop words
+        stop = {'the','a','an','is','are','was','what','which','how','when',
+                'where','does','do','in','at','of','and','or','for','to'}
+        question_tokens -= stop
+        if not question_tokens:
+            return 5.0
+
+        context_text = ' '.join(retrieved_context).lower()
+        context_tokens = set(re.sub(r'[^\w\s]', '', context_text).split())
+        overlap = len(question_tokens & context_tokens) / max(len(question_tokens), 1)
+        # overlap 0→1 maps to score 2→9
+        return round(2.0 + overlap * 7.0, 2)
+
     async def _evaluate_answer_faithfulness(
         self,
         response: str,
         retrieved_context: Optional[List[str]]
     ) -> float:
-        """Evaluate if answer is faithful to retrieved context"""
+        """
+        Evaluate if the answer is faithful to the retrieved context.
+
+        Faithfulness = the answer does not contradict or hallucinate facts
+        beyond what is present in the retrieved context.
+
+        Uses LLM judge when available; falls back to entailment heuristic.
+        """
         if not retrieved_context:
             return 5.0
-        
-        # Implementation similar to other evaluation methods
-        return 5.0  # Placeholder
+
+        context_combined = '\n'.join(retrieved_context[:4])
+
+        # ── Try LLM judge first ───────────────────────────────────────────
+        prompt = f"""You are evaluating a flood intelligence AI system for faithfulness.
+
+Retrieved Context (ground truth):
+{context_combined[:800]}
+
+AI Response to evaluate:
+{response[:600]}
+
+Rate faithfulness (1-10):
+- 9-10: Response only states facts present in the context, no hallucinations
+- 7-8:  Mostly faithful with minor additions that are reasonable inferences
+- 5-6:  Some claims go beyond the context but are not contradictory
+- 3-4:  Response contradicts or significantly departs from context
+- 1-2:  Response is entirely inconsistent with provided context
+
+Return only a single number between 1.0 and 10.0."""
+
+        try:
+            judge_response = await self._call_judge_model(prompt)
+            score = float(judge_response.strip().split()[0])
+            return max(1.0, min(10.0, score))
+        except Exception:
+            pass
+
+        # ── Heuristic fallback: check for factual claims in context ───────
+        import re
+        # Extract numbers and key flood terms from context and response
+        context_numbers = set(re.findall(r'\b\d+(?:\.\d+)?\b', context_combined))
+        response_numbers = set(re.findall(r'\b\d+(?:\.\d+)?\b', response))
+
+        context_terms = set(re.findall(r'\b(?:flood|discharge|cfs|risk|mm|kmh|'
+                                        r'brahmaputra|ganga|mahanadi|odisha|assam|bihar)\b',
+                                        context_combined.lower()))
+        response_terms = set(re.findall(r'\b(?:flood|discharge|cfs|risk|mm|kmh|'
+                                         r'brahmaputra|ganga|mahanadi|odisha|assam|bihar)\b',
+                                         response.lower()))
+
+        # Numbers in response that aren't in context → potential hallucination
+        extra_numbers = response_numbers - context_numbers
+        hallucination_penalty = min(3.0, len(extra_numbers) * 0.3)
+
+        # Topic overlap — response discusses same flood topics as context
+        if context_terms:
+            topic_overlap = len(context_terms & response_terms) / len(context_terms)
+        else:
+            topic_overlap = 0.5
+
+        base_score = 5.0 + topic_overlap * 3.0 - hallucination_penalty
+        return round(max(1.0, min(10.0, base_score)), 2)
     
     async def _evaluate_groundedness(
         self,
