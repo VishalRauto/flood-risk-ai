@@ -113,8 +113,8 @@ IMD Rainfall thresholds applied:
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/sunilsasamal45/Flood-Risk-Assessment.git
-cd Flood-Risk-Assessment
+git clone https://github.com/VishalRauto/flood-risk-ai.git
+cd flood-risk-ai
 ```
 
 ### 2. Set up environment
@@ -150,7 +150,7 @@ http://localhost:8000
 ## Project Structure
 
 ```
-Flood-Risk-Assessment/
+flood-risk-ai/
 ├── core/                          # Python backend
 │   ├── src/flood_prediction/
 │   │   ├── server.py              # FastAPI routes
