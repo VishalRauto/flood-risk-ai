@@ -39,6 +39,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
 import h2oIcon from '@/assets/h2o.ico'
 import ResearchDashboard from '@/components/ResearchDashboard'
+import LanguageSwitcher from '@/components/LanguageSwitcher'
 
 interface Message {
     id: number
@@ -1179,6 +1180,17 @@ I can help you with:
                     </div>
                     {/* Right side - Status buttons */}
                     <div className="flex items-center space-x-3 flex-1 justify-end">
+
+                        {/* Public Portal Link */}
+                        <a href="/public"
+                           className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                      text-xs font-medium bg-blue-600/10 border border-blue-500/30
+                                      text-blue-400 hover:bg-blue-600/20 transition-colors">
+                            🌊 Public Portal
+                        </a>
+
+                        {/* Language Switcher */}
+                        <LanguageSwitcher compact />
 
                         {/* Agents Online Status */}
                         <HoverCard>

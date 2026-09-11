@@ -2658,6 +2658,406 @@ async def get_sms_config():
 
 
 # =============================================================================
+# Phase 1 — Public Portal, Translations, User Accounts APIs
+# =============================================================================
+
+# ── Translations ──────────────────────────────────────────────────────────────
+
+@app.get(_api("translations/{lang}"))
+async def get_translations(lang: str):
+    """Return all UI translations for a given language code."""
+    try:
+        from .translations import get_all_translations, SUPPORTED_LANGUAGES
+        valid = [l["code"] for l in SUPPORTED_LANGUAGES]
+        if lang not in valid:
+            lang = "en"
+        return {
+            "lang": lang,
+            "translations": get_all_translations(lang),
+            "supported_languages": SUPPORTED_LANGUAGES,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("translations"))
+async def get_supported_languages():
+    """Return list of all supported languages."""
+    from .translations import SUPPORTED_LANGUAGES
+    return {"languages": SUPPORTED_LANGUAGES}
+
+
+# ── Public Portal ─────────────────────────────────────────────────────────────
+
+# District → basin/region mapping for public search
+_DISTRICT_BASIN_MAP = {
+    # Assam
+    "guwahati": "IN-BRAHMAPUTRA", "dibrugarh": "IN-BRAHMAPUTRA",
+    "jorhat": "IN-BRAHMAPUTRA", "dhubri": "IN-BRAHMAPUTRA",
+    "barpeta": "IN-BRAHMAPUTRA", "lakhimpur": "IN-BRAHMAPUTRA",
+    "silchar": "IN-BRAHMAPUTRA", "tezpur": "IN-BRAHMAPUTRA",
+    # Bihar
+    "patna": "IN-GANGA", "muzaffarpur": "IN-GANGA", "darbhanga": "IN-GANGA",
+    "supaul": "IN-GANGA", "madhubani": "IN-GANGA", "samastipur": "IN-GANGA",
+    "bhagalpur": "IN-GANGA", "vaishali": "IN-GANGA",
+    # West Bengal
+    "kolkata": "IN-GANGA", "howrah": "IN-GANGA", "malda": "IN-GANGA",
+    "murshidabad": "IN-GANGA", "nadia": "IN-GANGA",
+    # Uttar Pradesh
+    "varanasi": "IN-GANGA", "allahabad": "IN-GANGA", "prayagraj": "IN-GANGA",
+    "kanpur": "IN-GANGA", "lucknow": "IN-GANGA", "agra": "IN-GANGA",
+    # Odisha
+    "cuttack": "IN-MAHANADI", "puri": "IN-MAHANADI", "bhubaneswar": "IN-MAHANADI",
+    "kendrapara": "IN-MAHANADI", "jagatsinghpur": "IN-MAHANADI", "balasore": "IN-MAHANADI",
+    # Andhra Pradesh / Telangana
+    "rajahmundry": "IN-GODAVARI", "eluru": "IN-GODAVARI",
+    "vijayawada": "IN-KRISHNA", "guntur": "IN-KRISHNA",
+    "hyderabad": "IN-GODAVARI", "warangal": "IN-GODAVARI",
+    # Karnataka / Tamil Nadu
+    "bengaluru": "IN-KAVERI", "mysuru": "IN-KAVERI", "mandya": "IN-KAVERI",
+    "trichy": "IN-KAVERI", "thanjavur": "IN-KAVERI", "nagapattinam": "IN-KAVERI",
+    # Madhya Pradesh / Gujarat
+    "jabalpur": "IN-NARMADA", "hoshangabad": "IN-NARMADA",
+    "surat": "IN-NARMADA", "vadodara": "IN-NARMADA", "bharuch": "IN-NARMADA",
+    # Punjab
+    "amritsar": "IN-INDUS", "ludhiana": "IN-INDUS", "jalandhar": "IN-INDUS",
+}
+
+
+@app.get(_api("public/risk"))
+async def get_public_risk(city: str = "", district: str = "", lang: str = "en"):
+    """
+    Public-facing flood risk for a city or district.
+    Returns plain-language risk with action guide in the requested language.
+    No authentication required.
+    """
+    try:
+        from .translations import t, TRANSLATIONS
+
+        query = (city or district).lower().strip()
+        if not query:
+            raise HTTPException(status_code=400, detail="city or district is required")
+
+        # Find matching basin
+        region_code = _DISTRICT_BASIN_MAP.get(query)
+
+        # Get live watershed data
+        watersheds = db.get_watersheds(str(_db_path))
+
+        # Filter by region if found, else search by name
+        if region_code:
+            matches = [w for w in watersheds
+                       if w.get("region_code") == region_code]
+        else:
+            matches = [w for w in watersheds
+                       if query in (w.get("name") or "").lower()
+                       or query in (w.get("region") or "").lower()]
+
+        if not matches:
+            # Return national average if no match
+            matches = watersheds
+
+        # Compute aggregate risk
+        risk_scores = [float(w.get("risk_score") or 0) for w in matches]
+        avg_risk    = sum(risk_scores) / len(risk_scores) if risk_scores else 0
+        max_risk    = max(risk_scores) if risk_scores else 0
+        use_risk    = max_risk  # show worst case for public safety
+
+        # Determine level
+        if use_risk >= 8.0:
+            level_key  = "risk_critical"
+            action_key = "action_critical"
+            color      = "#ef4444"
+        elif use_risk >= 6.0:
+            level_key  = "risk_high"
+            action_key = "action_high"
+            color      = "#f97316"
+        elif use_risk >= 4.0:
+            level_key  = "risk_moderate"
+            action_key = "action_moderate"
+            color      = "#eab308"
+        else:
+            level_key  = "risk_low"
+            action_key = "action_low"
+            color      = "#22c55e"
+
+        # Rising sites count
+        rising = sum(1 for w in matches if w.get("trend") == "rising")
+
+        # Active alerts for this region
+        all_alerts = db.get_active_alerts(str(_db_path), limit=50)
+        local_alerts = []
+        if region_code:
+            local_alerts = [a for a in all_alerts
+                            if region_code in str(a.get("watershed", "")).upper()
+                            or query in str(a.get("watershed", "")).lower()]
+        else:
+            local_alerts = all_alerts[:3]
+
+        return {
+            "query":        city or district,
+            "region_code":  region_code,
+            "risk_score":   round(use_risk, 1),
+            "risk_level":   t(level_key, lang),
+            "risk_level_en": level_key.replace("risk_", "").upper(),
+            "color":        color,
+            "action":       t(action_key, lang),
+            "emergency":    t("emergency_contact", lang),
+            "rising_sites": rising,
+            "sites_checked": len(matches),
+            "alerts":       [
+                {
+                    "type":    a.get("alert_type", "Alert"),
+                    "message": a.get("message", ""),
+                    "severity": a.get("severity", ""),
+                }
+                for a in local_alerts[:3]
+            ],
+            "rivers": [
+                {
+                    "name":     w.get("name", ""),
+                    "risk":     round(float(w.get("risk_score") or 0), 1),
+                    "trend":    t(f"trend_{w.get('trend','stable')}", lang),
+                    "level_en": (
+                        "CRITICAL" if float(w.get("risk_score") or 0) >= 8 else
+                        "HIGH"     if float(w.get("risk_score") or 0) >= 6 else
+                        "MODERATE" if float(w.get("risk_score") or 0) >= 4 else "LOW"
+                    ),
+                }
+                for w in sorted(matches, key=lambda x: float(x.get("risk_score") or 0),
+                                reverse=True)[:5]
+            ],
+            "last_updated": matches[0].get("last_updated") if matches else None,
+            "lang":         lang,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"public/risk error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("public/map"))
+async def get_public_map_data():
+    """
+    Lightweight data for the public India risk map.
+    Returns all watersheds with just name, coords, risk level, and color.
+    """
+    try:
+        watersheds = db.get_watersheds(str(_db_path))
+        return {
+            "sites": [
+                {
+                    "id":     w.get("id"),
+                    "name":   w.get("name", ""),
+                    "lat":    w.get("location_lat"),
+                    "lng":    w.get("location_lng"),
+                    "risk":   round(float(w.get("risk_score") or 0), 1),
+                    "level":  w.get("current_risk_level", "Low"),
+                    "trend":  w.get("trend", "stable"),
+                    "region": w.get("region_code", ""),
+                    "color": (
+                        "#ef4444" if float(w.get("risk_score") or 0) >= 8 else
+                        "#f97316" if float(w.get("risk_score") or 0) >= 6 else
+                        "#eab308" if float(w.get("risk_score") or 0) >= 4 else
+                        "#22c55e"
+                    ),
+                }
+                for w in watersheds
+                if w.get("location_lat") and w.get("location_lng")
+            ],
+            "summary": db.get_dashboard_summary(str(_db_path)),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("public/districts"))
+async def get_searchable_districts():
+    """Return list of all searchable cities and districts."""
+    districts = sorted(set(_DISTRICT_BASIN_MAP.keys()))
+    return {"districts": districts, "count": len(districts)}
+
+
+# ── User Accounts ─────────────────────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    name: str
+    password: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    home_district: Optional[str] = None
+    home_state: Optional[str] = None
+    language: str = "en"
+    alert_threshold: str = "HIGH"
+
+
+class LoginRequest(BaseModel):
+    identifier: str   # email or phone
+    password: str
+
+
+class PreferencesRequest(BaseModel):
+    home_district: Optional[str] = None
+    home_state: Optional[str] = None
+    language: Optional[str] = None
+    alert_threshold: Optional[str] = None
+    alert_sms: Optional[bool] = None
+    alert_email: Optional[bool] = None
+    alert_whatsapp: Optional[bool] = None
+
+
+def _get_user_from_token(token: str) -> Optional[Dict[str, Any]]:
+    """Extract user from Bearer token (user session token)."""
+    from .user_accounts import get_user_by_token
+    if not token or token == "dev-token":
+        return None
+    return get_user_by_token(str(_db_path), token)
+
+
+@app.post(_api("user/register"))
+async def register_user_endpoint(request: RegisterRequest):
+    """Register a new user account."""
+    try:
+        from .user_accounts import register_user, init_user_tables
+        init_user_tables(str(_db_path))
+        user = register_user(
+            str(_db_path),
+            name=request.name,
+            password=request.password,
+            email=request.email,
+            phone=request.phone,
+            home_district=request.home_district,
+            home_state=request.home_state,
+            language=request.language,
+            alert_threshold=request.alert_threshold,
+        )
+        return {"status": "success", "message": "Registration successful", "user": user}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"user/register error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(_api("user/login"))
+async def login_user_endpoint(request: LoginRequest):
+    """Login with email or phone + password."""
+    try:
+        from .user_accounts import login_user, init_user_tables
+        init_user_tables(str(_db_path))
+        result = login_user(str(_db_path), request.identifier, request.password)
+        if not result:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        return {"status": "success", "user": result, "token": result.get("session_token")}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"user/login error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(_api("user/logout"))
+async def logout_user_endpoint(request: Request):
+    """Logout and invalidate session token."""
+    try:
+        from .user_accounts import logout_user
+        auth = request.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "").strip()
+        if token and token != "dev-token":
+            logout_user(str(_db_path), token)
+        return {"status": "success", "message": "Logged out"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("user/me"))
+async def get_current_user(request: Request):
+    """Get current user profile from session token."""
+    try:
+        auth  = request.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "").strip()
+        user  = _get_user_from_token(token)
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        # Add unread alert count
+        from .user_accounts import get_unread_count
+        user["unread_alerts"] = get_unread_count(str(_db_path), user["id"])
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put(_api("user/preferences"))
+async def update_preferences(request: Request, body: PreferencesRequest):
+    """Update user preferences."""
+    try:
+        from .user_accounts import update_user_preferences
+        auth  = request.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "").strip()
+        user  = _get_user_from_token(token)
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        updated = update_user_preferences(
+            str(_db_path), user["id"],
+            home_district=body.home_district,
+            home_state=body.home_state,
+            language=body.language,
+            alert_threshold=body.alert_threshold,
+            alert_sms=body.alert_sms,
+            alert_email=body.alert_email,
+            alert_whatsapp=body.alert_whatsapp,
+        )
+        return {"status": "success", "user": updated}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get(_api("user/alerts"))
+async def get_user_alerts(request: Request, limit: int = 50):
+    """Get personalized alert history for the logged-in user."""
+    try:
+        from .user_accounts import get_user_alert_history, get_unread_count
+        auth  = request.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "").strip()
+        user  = _get_user_from_token(token)
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        alerts   = get_user_alert_history(str(_db_path), user["id"], limit)
+        unread   = get_unread_count(str(_db_path), user["id"])
+        return {"alerts": alerts, "unread": unread, "total": len(alerts)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post(_api("user/alerts/{alert_id}/acknowledge"))
+async def acknowledge_user_alert(alert_id: int, request: Request):
+    """Mark an alert as read/acknowledged."""
+    try:
+        from .user_accounts import acknowledge_alert
+        auth  = request.headers.get("Authorization", "")
+        token = auth.replace("Bearer ", "").strip()
+        user  = _get_user_from_token(token)
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        ok = acknowledge_alert(str(_db_path), user["id"], alert_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Alert not found")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# =============================================================================
 # Explainability, Uncertainty, Evacuation, Soil Moisture, Offline Mode APIs
 # =============================================================================
 
