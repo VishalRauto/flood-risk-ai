@@ -1,5 +1,10 @@
 from .base import AIProvider
-from .h2ogpte_provider import H2OGPTEProvider
+
+try:
+    from .h2ogpte_provider import H2OGPTEProvider
+except ImportError:
+    H2OGPTEProvider = None  # Optional — requires h2ogpte package
+
 from .nvidia_provider import NVIDIAProvider
 from .local_nim_llm_provider import LocalNIMLLMProvider
 from .factory import get_ai_provider, get_available_providers

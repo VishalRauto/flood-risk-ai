@@ -1,7 +1,14 @@
 from typing import Dict, Type
 import httpx
 from .base import AIProvider
-from .h2ogpte_provider import H2OGPTEProvider
+
+try:
+    from .h2ogpte_provider import H2OGPTEProvider
+    _H2OGPTE_AVAILABLE = True
+except ImportError:
+    H2OGPTEProvider = None
+    _H2OGPTE_AVAILABLE = False
+
 from .nvidia_provider import NVIDIAProvider
 from .local_nim_llm_provider import LocalNIMLLMProvider
 from ..settings import settings, log
@@ -51,9 +58,14 @@ def _initialize_provider_registry() -> Dict[str, Type[AIProvider]]:
         Dictionary of available providers
     """
     registry = {
-        "h2ogpte": H2OGPTEProvider,
         "nvidia": NVIDIAProvider,
     }
+
+    # H2OGPTE is optional — only register if the package is installed
+    if _H2OGPTE_AVAILABLE and H2OGPTEProvider is not None:
+        registry["h2ogpte"] = H2OGPTEProvider
+    else:
+        log.info("H2OGPTE provider not available: 'h2ogpte' package not installed (optional)")
 
     # Only add nim-llm if properly configured
     if settings.local_nim_base_url and settings.local_nim_default_model:

@@ -4,6 +4,7 @@ import { LoggingProvider } from '@/contexts/LoggingContext'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import UnifiedDashboard from '@/components/UnifiedDashboard'
 import PublicPortal from '@/pages/PublicPortal'
+import LuxuryDashboard from '@/pages/LuxuryDashboard'
 import {
   AuthProvider,
   RegisterPage,
@@ -11,6 +12,7 @@ import {
   ProfilePage,
   AlertHistoryPage,
 } from '@/pages/UserAuth'
+import '@/styles/luxury.css'
 
 function AppContent() {
   return (
@@ -19,6 +21,9 @@ function AppContent() {
         {/* ── Main research dashboard ───────────────────────── */}
         <Route path="/"          element={<UnifiedDashboard />} />
         <Route path="/dashboard" element={<UnifiedDashboard />} />
+
+        {/* ── Luxury 3D Dashboard ───────────────────────────── */}
+        <Route path="/luxury"    element={<LuxuryDashboard />} />
 
         {/* ── Public citizen portal ─────────────────────────── */}
         <Route path="/public"    element={<PublicPortal />} />

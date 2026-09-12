@@ -1177,6 +1177,19 @@ I can help you with:
                             activeTab={activeTab}
                             onTabChange={setActiveTab}
                         />
+                        {/* ✨ 3D View button — right next to tabs */}
+                        <a
+                            href="/luxury"
+                            className="ml-2 flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 hover:scale-105"
+                            style={{
+                                background: 'linear-gradient(135deg, #D4AF37, #A67C1C)',
+                                color: '#050A1C',
+                                boxShadow: '0 0 16px rgba(212,175,55,0.45)',
+                                letterSpacing: '0.3px',
+                            }}
+                        >
+                            ✨ 3D View
+                        </a>
                     </div>
                     {/* Right side - Status buttons */}
                     <div className="flex items-center space-x-3 flex-1 justify-end">
@@ -1187,6 +1200,20 @@ I can help you with:
                                       text-xs font-medium bg-blue-600/10 border border-blue-500/30
                                       text-blue-400 hover:bg-blue-600/20 transition-colors">
                             🌊 Public Portal
+                        </a>
+
+                        {/* Luxury 3D Dashboard Link — always visible */}
+                        <a href="/luxury"
+                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                      text-xs font-semibold transition-all duration-200
+                                      hover:scale-105"
+                           style={{
+                             background: 'linear-gradient(135deg, rgba(212,175,55,0.25), rgba(212,175,55,0.1))',
+                             border: '1px solid rgba(212,175,55,0.5)',
+                             color: '#F5D06C',
+                             boxShadow: '0 0 12px rgba(212,175,55,0.2)',
+                           }}>
+                            ✨ 3D View
                         </a>
 
                         {/* Language Switcher */}
