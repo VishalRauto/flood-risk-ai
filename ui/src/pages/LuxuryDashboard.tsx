@@ -16,9 +16,11 @@
 
 import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Link } from 'react-router-dom'
+
 import LuxuryMetricCard from '@/components/LuxuryMetricCard'
+import GlobalHeader from '@/components/GlobalHeader'
 import '@/styles/luxury.css'
+import '@/styles/design-system.css'
 
 // Lazy load heavy 3D background
 const LuxuryBackground = lazy(() => import('@/components/LuxuryBackground'))
@@ -128,100 +130,64 @@ export default function LuxuryDashboard() {
         <LuxuryBackground />
       </Suspense>
 
-      {/* ── Header ──────────────────────────────────────────────── */}
-      <motion.header
-        initial={{ y: -60, opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        transition={{ duration: 0.8, ease: [0.23, 1, 0.32, 1] }}
-        className="relative z-50 flex items-center justify-between px-6 py-3"
-        style={{
-          background: 'rgba(5,10,28,0.85)',
-          backdropFilter: 'blur(30px)',
-          borderBottom: '1px solid rgba(212,175,55,0.15)',
-          boxShadow: '0 4px 40px rgba(0,0,0,0.5)',
-        }}
-      >
-        {/* Logo */}
-        <div className="flex items-center gap-3">
-          <motion.div
-            animate={{ rotate: [0, 5, -5, 0] }}
-            transition={{ duration: 4, repeat: Infinity }}
-            className="text-3xl"
-          >
-            🌊
-          </motion.div>
-          <div>
-            <h1 className="font-black text-lg leading-none" style={{
-              background: 'linear-gradient(135deg, #F5D06C, #D4AF37, #A67C1C)',
-              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent'
-            }}>
-              FLOOD INTELLIGENCE
-            </h1>
-            <p className="text-xs" style={{ color: 'rgba(0,212,255,0.7)', letterSpacing: '2px' }}>
-              INDIA · AI-POWERED · REAL-TIME
-            </p>
+      {/* ── GlobalHeader (luxury variant) ───────────────────────── */}
+      <div className="relative z-50">
+        <GlobalHeader
+          variant="luxury"
+          rightSlot={
+            summary ? (
+              <motion.div
+                animate={{ opacity: [0.7, 1, 0.7] }}
+                transition={{ duration: 2, repeat: Infinity }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full"
+                style={{ background: 'rgba(0,230,118,0.1)', border: '1px solid rgba(0,230,118,0.25)' }}
+              >
+                <div className="w-2 h-2 rounded-full bg-green-400" />
+                <span className="text-xs font-semibold text-green-400 hidden sm:inline">
+                  {summary.total_watersheds} Sites Live
+                </span>
+              </motion.div>
+            ) : null
+          }
+        />
+
+        {/* ── Tab sub-bar ────────────────────────────────────────── */}
+        <div className="flex justify-center py-2 px-4"
+             style={{ background: 'rgba(5,10,28,0.7)', backdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(212,175,55,0.1)' }}>
+          <div className="flex items-center gap-1 p-1 rounded-xl"
+               style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            {([
+              { id: 'map',      label: '🗺️ Live Map'    },
+              { id: 'features', label: '✨ 12 Features'  },
+              { id: 'alerts',   label: '⚠️ Alerts'      },
+              { id: 'twin',     label: '🔮 Digital Twin' },
+            ] as const).map(tab => (
+              <motion.button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className="px-4 py-2 rounded-lg text-xs font-semibold transition-all relative"
+                style={{
+                  color: activeTab === tab.id ? '#050A1C' : 'rgba(255,255,255,0.5)',
+                  background: activeTab === tab.id ? 'linear-gradient(135deg, #F5D06C, #D4AF37)' : 'transparent',
+                }}
+              >
+                {tab.label}
+                {activeTab === tab.id && (
+                  <motion.div
+                    layoutId="tabIndicator"
+                    className="absolute inset-0 rounded-lg"
+                    style={{ background: 'linear-gradient(135deg, #F5D06C, #D4AF37)', zIndex: -1 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 35 }}
+                  />
+                )}
+              </motion.button>
+            ))}
           </div>
         </div>
-
-        {/* Nav tabs */}
-        <div className="flex items-center gap-1 p-1 rounded-xl"
-             style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
-          {([
-            { id: 'map',      label: '🗺️ Live Map',   },
-            { id: 'features', label: '✨ 12 Features', },
-            { id: 'alerts',   label: '⚠️ Alerts',     },
-            { id: 'twin',     label: '🔮 Digital Twin'},
-          ] as const).map(tab => (
-            <motion.button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className="px-4 py-2 rounded-lg text-xs font-semibold transition-all relative"
-              style={{
-                color: activeTab === tab.id ? '#050A1C' : 'rgba(255,255,255,0.5)',
-                background: activeTab === tab.id
-                  ? 'linear-gradient(135deg, #F5D06C, #D4AF37)'
-                  : 'transparent',
-              }}
-            >
-              {tab.label}
-              {activeTab === tab.id && (
-                <motion.div
-                  layoutId="tabIndicator"
-                  className="absolute inset-0 rounded-lg"
-                  style={{ background: 'linear-gradient(135deg, #F5D06C, #D4AF37)', zIndex: -1 }}
-                  transition={{ type: 'spring', stiffness: 400, damping: 35 }}
-                />
-              )}
-            </motion.button>
-          ))}
-        </div>
-
-        {/* Status + links */}
-        <div className="flex items-center gap-3">
-          {summary && (
-            <motion.div
-              animate={{ opacity: [0.7, 1, 0.7] }}
-              transition={{ duration: 2, repeat: Infinity }}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full"
-              style={{ background: 'rgba(0,230,118,0.1)', border: '1px solid rgba(0,230,118,0.25)' }}
-            >
-              <div className="w-2 h-2 rounded-full bg-green-400" />
-              <span className="text-xs font-semibold text-green-400">
-                {summary.total_watersheds} Sites Active
-              </span>
-            </motion.div>
-          )}
-          <Link to="/" className="btn-ghost text-xs px-3 py-1.5">
-            Full Dashboard
-          </Link>
-          <Link to="/public" className="btn-luxury text-xs px-3 py-1.5">
-            Public Portal
-          </Link>
-        </div>
-      </motion.header>
+      </div>
 
       {/* ── Main Content ─────────────────────────────────────────── */}
-      <div className="relative z-10 p-4 luxury-scroll" style={{ maxHeight: 'calc(100vh - 60px)', overflowY: 'auto' }}>
+      <div className="relative z-10 p-4 luxury-scroll" style={{ minHeight: 'calc(100vh - 120px)', overflowY: 'auto' }}>
 
         {/* ── Top Metrics Row ─────────────────────────────────── */}
         <motion.div

@@ -37,7 +37,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Switch } from "@/components/ui/switch"
-import h2oIcon from '@/assets/h2o.ico'
 import ResearchDashboard from '@/components/ResearchDashboard'
 import LanguageSwitcher from '@/components/LanguageSwitcher'
 
@@ -1130,13 +1129,18 @@ I can help you with:
 
     return (
         <div className="min-h-screen bg-black text-white overflow-hidden">
-            {/* Header */}
-            <div className="border-b border-border">
-                {/* Navigation and Status Row */}
+            {/* ── Header ─────────────────────────────────────────────── */}
+            <div className="border-b border-border" style={{ borderColor: 'rgba(0,212,255,0.12)' }}>
+                {/* Navigation Row */}
                 <div className="flex items-center px-6 pb-4">
+                    {/* Left: Logo + Region Selector */}
                     <div className="flex items-center space-x-4 py-4 flex-1">
-                        <img src={h2oIcon} alt="H2O.ai" className="h-8 w-8 mr-2" />
-                        <h1 className="text-2xl font-bold text-white">Flood Intelligence</h1>
+                        <a href="/" style={{ display:'flex', alignItems:'center', gap:8, textDecoration:'none' }}>
+                            <span className="text-3xl">🌊</span>
+                            <h1 className="text-xl font-black text-white" style={{ background:'linear-gradient(135deg,#fff,#00D4FF)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>
+                                Flood Intelligence
+                            </h1>
+                        </a>
 
                         {/* Region Selector */}
                         <div className="flex items-center space-x-2 ml-4">
@@ -1164,7 +1168,8 @@ I can help you with:
                             </Select>
                         </div>
                     </div>
-                    {/* Center - Navigation Tabs */}
+
+                    {/* Center - Navigation Tabs (absolute centered) */}
                     <div className="flex justify-center absolute left-1/2 transform -translate-x-1/2">
                         <TubelightNavbar
                             items={[
@@ -1177,43 +1182,21 @@ I can help you with:
                             activeTab={activeTab}
                             onTabChange={setActiveTab}
                         />
-                        {/* ✨ 3D View button — right next to tabs */}
-                        <a
-                            href="/luxury"
-                            className="ml-2 flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 hover:scale-105"
-                            style={{
-                                background: 'linear-gradient(135deg, #D4AF37, #A67C1C)',
-                                color: '#050A1C',
-                                boxShadow: '0 0 16px rgba(212,175,55,0.45)',
-                                letterSpacing: '0.3px',
-                            }}
-                        >
-                            ✨ 3D View
-                        </a>
                     </div>
-                    {/* Right side - Status buttons */}
-                    <div className="flex items-center space-x-3 flex-1 justify-end">
 
-                        {/* Public Portal Link */}
-                        <a href="/public"
-                           className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                                      text-xs font-medium bg-blue-600/10 border border-blue-500/30
-                                      text-blue-400 hover:bg-blue-600/20 transition-colors">
-                            🌊 Public Portal
+                    {/* Right: Links + Auth */}
+                    <div className="flex items-center space-x-2 flex-1 justify-end">
+
+                        {/* Public Portal */}
+                        <a href="/public" className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                           style={{ background:'rgba(0,212,255,0.08)', border:'1px solid rgba(0,212,255,0.2)', color:'#00D4FF' }}>
+                            🌊 Public
                         </a>
 
-                        {/* Luxury 3D Dashboard Link — always visible */}
-                        <a href="/luxury"
-                           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                                      text-xs font-semibold transition-all duration-200
-                                      hover:scale-105"
-                           style={{
-                             background: 'linear-gradient(135deg, rgba(212,175,55,0.25), rgba(212,175,55,0.1))',
-                             border: '1px solid rgba(212,175,55,0.5)',
-                             color: '#F5D06C',
-                             boxShadow: '0 0 12px rgba(212,175,55,0.2)',
-                           }}>
-                            ✨ 3D View
+                        {/* 3D View — single instance only here */}
+                        <a href="/luxury" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:scale-105"
+                           style={{ background:'linear-gradient(135deg,#D4AF37,#A67C1C)', color:'#050A1C', boxShadow:'0 0 12px rgba(212,175,55,0.35)' }}>
+                            ✨ 3D
                         </a>
 
                         {/* Language Switcher */}

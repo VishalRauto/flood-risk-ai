@@ -12,29 +12,32 @@ import {
   ProfilePage,
   AlertHistoryPage,
 } from '@/pages/UserAuth'
+
+// Global style imports
 import '@/styles/luxury.css'
+import '@/styles/design-system.css'
 
 function AppContent() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* ── Main research dashboard ───────────────────────── */}
+        {/* ── Main Research Dashboard ────────────────────── */}
         <Route path="/"          element={<UnifiedDashboard />} />
         <Route path="/dashboard" element={<UnifiedDashboard />} />
 
-        {/* ── Luxury 3D Dashboard ───────────────────────────── */}
+        {/* ── Luxury 3D Dashboard ────────────────────────── */}
         <Route path="/luxury"    element={<LuxuryDashboard />} />
 
-        {/* ── Public citizen portal ─────────────────────────── */}
+        {/* ── Public Citizen Portal ──────────────────────── */}
         <Route path="/public"    element={<PublicPortal />} />
 
-        {/* ── User auth + profile ───────────────────────────── */}
+        {/* ── Authentication & Profile ────────────────────── */}
         <Route path="/register"  element={<RegisterPage />} />
         <Route path="/login"     element={<LoginPage />} />
         <Route path="/profile"   element={<ProfilePage />} />
         <Route path="/alerts"    element={<AlertHistoryPage />} />
 
-        {/* ── Fallback ──────────────────────────────────────── */}
+        {/* ── Fallback ────────────────────────────────────── */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
@@ -46,7 +49,7 @@ function App() {
     <ConfigProvider>
       <LoggingProvider>
         <ThemeProvider>
-          {/* AuthProvider wraps everything so any page can call useAuth() */}
+          {/* AuthProvider wraps everything — useAuth() works in all pages */}
           <AuthProvider>
             <AppContent />
           </AuthProvider>

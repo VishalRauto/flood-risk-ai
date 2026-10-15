@@ -1,0 +1,361 @@
+/* ================================================================
+   INDIA FLOOD INTELLIGENCE — COMPLETE DESIGN SYSTEM
+   ================================================================
+   
+   Design principles:
+   - Midnight navy dark-first palette
+   - Cyan + turquoise primary accents
+   - Restrained gold for premium highlights
+   - Clear risk hierarchy: critical/high/moderate/low
+   - Accessible: color + icon + text for all risk states
+   - Mobile-first responsive
+   ================================================================ */
+
+/* ── Google Fonts ──────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+/* ── Design tokens ─────────────────────────────────────────────── */
+:root {
+  /* Colors */
+  --ifi-navy-deepest:  #020814;
+  --ifi-navy-deep:     #050A1C;
+  --ifi-navy-mid:      #0A1628;
+  --ifi-navy-light:    #0F2040;
+  --ifi-navy-surface:  #111827;
+
+  --ifi-cyan:          #00D4FF;
+  --ifi-cyan-dim:      rgba(0,212,255,0.7);
+  --ifi-cyan-muted:    rgba(0,212,255,0.15);
+  --ifi-cyan-border:   rgba(0,212,255,0.25);
+  --ifi-teal:          #00FFD1;
+  --ifi-teal-muted:    rgba(0,255,209,0.12);
+
+  --ifi-gold:          #D4AF37;
+  --ifi-gold-light:    #F5D06C;
+  --ifi-gold-dark:     #A67C1C;
+  --ifi-gold-muted:    rgba(212,175,55,0.12);
+  --ifi-gold-border:   rgba(212,175,55,0.3);
+
+  --ifi-platinum:      #E5E4E2;
+  --ifi-white:         #FFFFFF;
+  --ifi-text-primary:  rgba(255,255,255,0.92);
+  --ifi-text-secondary:rgba(255,255,255,0.55);
+  --ifi-text-muted:    rgba(255,255,255,0.32);
+
+  /* Risk colors — always paired with text labels */
+  --risk-critical:     #FF2D2D;
+  --risk-critical-bg:  rgba(255,45,45,0.10);
+  --risk-critical-border: rgba(255,45,45,0.35);
+  --risk-high:         #FF8C00;
+  --risk-high-bg:      rgba(255,140,0,0.10);
+  --risk-high-border:  rgba(255,140,0,0.30);
+  --risk-moderate:     #FFD600;
+  --risk-moderate-bg:  rgba(255,214,0,0.10);
+  --risk-moderate-border: rgba(255,214,0,0.25);
+  --risk-low:          #00E676;
+  --risk-low-bg:       rgba(0,230,118,0.08);
+  --risk-low-border:   rgba(0,230,118,0.22);
+
+  /* Glass */
+  --glass-bg:          rgba(255,255,255,0.04);
+  --glass-bg-hover:    rgba(255,255,255,0.07);
+  --glass-border:      rgba(255,255,255,0.08);
+  --glass-border-hover:rgba(255,255,255,0.14);
+
+  /* Shadows */
+  --shadow-sm:         0 2px 12px rgba(0,0,0,0.35);
+  --shadow-md:         0 8px 32px rgba(0,0,0,0.5);
+  --shadow-lg:         0 20px 60px rgba(0,0,0,0.65);
+  --shadow-cyan:       0 0 30px rgba(0,212,255,0.18);
+  --shadow-gold:       0 0 30px rgba(212,175,55,0.18);
+  --shadow-critical:   0 0 20px rgba(255,45,45,0.25);
+
+  /* Border radius */
+  --radius-sm:  8px;
+  --radius-md:  12px;
+  --radius-lg:  16px;
+  --radius-xl:  20px;
+  --radius-pill:100px;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --text-xs:    11px;
+  --text-sm:    13px;
+  --text-base:  14px;
+  --text-md:    15px;
+  --text-lg:    18px;
+  --text-xl:    22px;
+  --text-2xl:   28px;
+  --text-3xl:   36px;
+  --text-4xl:   48px;
+
+  /* Spacing */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Transitions */
+  --transition-fast:   all 0.15s ease;
+  --transition-normal: all 0.25s ease;
+  --transition-slow:   all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+  --transition-spring: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Z-index layers */
+  --z-base:    0;
+  --z-raised:  10;
+  --z-dropdown:50;
+  --z-modal:   100;
+  --z-overlay: 200;
+  --z-toast:   300;
+  --z-fixed:   400;
+}
+
+/* ── Global reset ──────────────────────────────────────────────── */
+.ifi-root,
+.ifi-root * {
+  font-family: var(--font-sans);
+  box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.ifi-root {
+  background: var(--ifi-navy-deep);
+  color: var(--ifi-text-primary);
+  min-height: 100vh;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+.ifi-root ::-webkit-scrollbar { width: 5px; height: 5px; }
+.ifi-root ::-webkit-scrollbar-track { background: rgba(255,255,255,0.02); }
+.ifi-root ::-webkit-scrollbar-thumb {
+  background: linear-gradient(var(--ifi-cyan), var(--ifi-gold));
+  border-radius: 3px;
+}
+
+/* ── Glass card ────────────────────────────────────────────────── */
+.ifi-card {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: var(--transition-normal);
+}
+.ifi-card:hover {
+  background: var(--glass-bg-hover);
+  border-color: var(--glass-border-hover);
+}
+.ifi-card-gold {
+  background: linear-gradient(135deg, rgba(212,175,55,0.08), rgba(212,175,55,0.03));
+  border: 1px solid var(--ifi-gold-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(20px);
+}
+.ifi-card-cyan {
+  background: linear-gradient(135deg, rgba(0,212,255,0.07), rgba(0,212,255,0.02));
+  border: 1px solid var(--ifi-cyan-border);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(20px);
+}
+
+/* ── Risk badges ───────────────────────────────────────────────── */
+.ifi-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: var(--radius-pill); font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; }
+.ifi-badge-critical { background: var(--risk-critical-bg); color: var(--risk-critical); border: 1px solid var(--risk-critical-border); }
+.ifi-badge-high     { background: var(--risk-high-bg);     color: var(--risk-high);     border: 1px solid var(--risk-high-border);     }
+.ifi-badge-moderate { background: var(--risk-moderate-bg); color: var(--risk-moderate); border: 1px solid var(--risk-moderate-border); }
+.ifi-badge-low      { background: var(--risk-low-bg);      color: var(--risk-low);      border: 1px solid var(--risk-low-border);      }
+
+/* ── Buttons ───────────────────────────────────────────────────── */
+.ifi-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 9px 20px; border-radius: var(--radius-md); font-size: var(--text-sm);
+  font-weight: 600; cursor: pointer; transition: var(--transition-normal);
+  border: none; text-decoration: none; white-space: nowrap;
+}
+.ifi-btn-primary {
+  background: linear-gradient(135deg, var(--ifi-cyan), #0099BB);
+  color: var(--ifi-navy-deep);
+  box-shadow: 0 4px 16px rgba(0,212,255,0.3);
+}
+.ifi-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(0,212,255,0.4); }
+.ifi-btn-gold {
+  background: linear-gradient(135deg, var(--ifi-gold-dark), var(--ifi-gold), var(--ifi-gold-light));
+  color: var(--ifi-navy-deep);
+  box-shadow: 0 4px 16px rgba(212,175,55,0.3);
+}
+.ifi-btn-gold:hover { transform: translateY(-1px); box-shadow: 0 6px 24px rgba(212,175,55,0.4); }
+.ifi-btn-ghost {
+  background: var(--glass-bg); color: var(--ifi-text-primary);
+  border: 1px solid var(--glass-border);
+}
+.ifi-btn-ghost:hover { background: var(--glass-bg-hover); border-color: var(--glass-border-hover); }
+.ifi-btn-danger {
+  background: linear-gradient(135deg, #C00, var(--risk-critical));
+  color: white; box-shadow: 0 4px 16px rgba(255,45,45,0.3);
+}
+.ifi-btn-sm { padding: 6px 14px; font-size: var(--text-xs); border-radius: var(--radius-sm); }
+.ifi-btn-lg { padding: 12px 28px; font-size: var(--text-md); border-radius: var(--radius-xl); }
+.ifi-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+/* ── Typography helpers ────────────────────────────────────────── */
+.ifi-text-gold {
+  background: linear-gradient(135deg, var(--ifi-gold-light), var(--ifi-gold), var(--ifi-gold-dark));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.ifi-text-cyan { color: var(--ifi-cyan); }
+.ifi-text-muted { color: var(--ifi-text-muted); }
+.ifi-text-secondary { color: var(--ifi-text-secondary); }
+.ifi-label {
+  font-size: var(--text-xs); font-weight: 700; text-transform: uppercase;
+  letter-spacing: 1.5px; color: var(--ifi-text-muted);
+}
+
+/* ── Form elements ─────────────────────────────────────────────── */
+.ifi-input {
+  width: 100%; padding: 11px 14px; border-radius: var(--radius-md);
+  background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.10);
+  color: var(--ifi-text-primary); font-size: var(--text-sm); font-family: var(--font-sans);
+  outline: none; transition: var(--transition-fast);
+}
+.ifi-input::placeholder { color: var(--ifi-text-muted); }
+.ifi-input:focus { border-color: var(--ifi-cyan-border); box-shadow: 0 0 0 3px rgba(0,212,255,0.08); }
+.ifi-input-error { border-color: rgba(255,45,45,0.5) !important; }
+.ifi-input-error:focus { box-shadow: 0 0 0 3px rgba(255,45,45,0.08) !important; }
+
+/* ── Progress bar ──────────────────────────────────────────────── */
+.ifi-progress { height: 4px; border-radius: 2px; background: rgba(255,255,255,0.06); overflow: hidden; }
+.ifi-progress-fill {
+  height: 100%; border-radius: 2px;
+  background: linear-gradient(90deg, var(--ifi-cyan), var(--ifi-teal));
+  transition: width 0.8s cubic-bezier(0.23,1,0.32,1);
+}
+
+/* ── Divider ───────────────────────────────────────────────────── */
+.ifi-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(212,175,55,0.25), rgba(0,212,255,0.2), rgba(212,175,55,0.25), transparent);
+  margin: 20px 0;
+}
+
+/* ── Table ─────────────────────────────────────────────────────── */
+.ifi-table { width: 100%; border-collapse: collapse; }
+.ifi-table th {
+  padding: 10px 14px; text-align: left; font-size: var(--text-xs);
+  font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase;
+  color: rgba(212,175,55,0.6); border-bottom: 1px solid rgba(212,175,55,0.1);
+}
+.ifi-table td {
+  padding: 11px 14px; font-size: var(--text-sm); color: var(--ifi-text-secondary);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.ifi-table tr:hover td { background: rgba(255,255,255,0.02); }
+.ifi-table tr:last-child td { border-bottom: none; }
+
+/* ── Glow effects ──────────────────────────────────────────────── */
+.ifi-glow-cyan  { box-shadow: var(--shadow-cyan);  }
+.ifi-glow-gold  { box-shadow: var(--shadow-gold);  }
+.ifi-glow-critical { box-shadow: var(--shadow-critical); }
+
+/* ── Animated dot (status indicator) ──────────────────────────── */
+@keyframes ifi-pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.85); }
+}
+.ifi-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.ifi-dot-online   { background: var(--risk-low);      animation: ifi-pulse-dot 2s infinite; }
+.ifi-dot-warning  { background: var(--risk-high);     animation: ifi-pulse-dot 1.5s infinite; }
+.ifi-dot-critical { background: var(--risk-critical); animation: ifi-pulse-dot 1s infinite; }
+.ifi-dot-offline  { background: var(--ifi-text-muted); }
+
+/* ── Skeleton loader ───────────────────────────────────────────── */
+@keyframes ifi-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.ifi-skeleton {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%);
+  background-size: 200% 100%;
+  animation: ifi-shimmer 1.8s infinite;
+}
+
+/* ── Toast / notification ──────────────────────────────────────── */
+.ifi-toast {
+  padding: 12px 16px; border-radius: var(--radius-md); font-size: var(--text-sm);
+  backdrop-filter: blur(20px); border: 1px solid; display: flex; align-items: center; gap: 10px;
+  box-shadow: var(--shadow-md);
+}
+.ifi-toast-success { background: rgba(0,230,118,0.12); border-color: rgba(0,230,118,0.3); color: var(--risk-low); }
+.ifi-toast-error   { background: rgba(255,45,45,0.12);  border-color: rgba(255,45,45,0.3);  color: var(--risk-critical); }
+.ifi-toast-info    { background: rgba(0,212,255,0.10);  border-color: rgba(0,212,255,0.25); color: var(--ifi-cyan); }
+.ifi-toast-warning { background: rgba(255,140,0,0.10);  border-color: rgba(255,140,0,0.25); color: var(--risk-high); }
+
+/* ── Modal ─────────────────────────────────────────────────────── */
+.ifi-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(4px); z-index: var(--z-overlay);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.ifi-modal {
+  background: var(--ifi-navy-mid); border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl); padding: 24px; max-width: 520px; width: 100%;
+  box-shadow: var(--shadow-lg);
+}
+
+/* ── Nav link ──────────────────────────────────────────────────── */
+.ifi-nav-link {
+  display: flex; align-items: center; gap: 6px; padding: 7px 14px;
+  border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: 500;
+  color: var(--ifi-text-secondary); text-decoration: none;
+  transition: var(--transition-fast); cursor: pointer; border: none; background: none;
+}
+.ifi-nav-link:hover  { color: var(--ifi-text-primary); background: rgba(255,255,255,0.05); }
+.ifi-nav-link.active { color: var(--ifi-cyan); background: rgba(0,212,255,0.08); }
+.ifi-nav-link-gold   { color: var(--ifi-gold-light); }
+.ifi-nav-link-gold:hover { color: var(--ifi-gold-light); background: rgba(212,175,55,0.08); }
+
+/* ── Animations ────────────────────────────────────────────────── */
+@keyframes ifi-fade-up {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ifi-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes ifi-scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.ifi-animate-fade-up  { animation: ifi-fade-up  0.4s cubic-bezier(0.23,1,0.32,1) both; }
+.ifi-animate-fade-in  { animation: ifi-fade-in  0.3s ease both; }
+.ifi-animate-scale-in { animation: ifi-scale-in 0.35s cubic-bezier(0.23,1,0.32,1) both; }
+.ifi-animate-delay-1  { animation-delay: 0.05s; }
+.ifi-animate-delay-2  { animation-delay: 0.10s; }
+.ifi-animate-delay-3  { animation-delay: 0.15s; }
+.ifi-animate-delay-4  { animation-delay: 0.20s; }
+.ifi-animate-delay-5  { animation-delay: 0.25s; }
+
+/* ── Reduced motion ────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .ifi-animate-fade-up,
+  .ifi-animate-fade-in,
+  .ifi-animate-scale-in { animation: none; opacity: 1; transform: none; }
+  .ifi-skeleton { animation: none; background: rgba(255,255,255,0.06); }
+  .ifi-dot-online, .ifi-dot-warning, .ifi-dot-critical { animation: none; }
+}
+
+/* ── Responsive ────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .ifi-hide-mobile { display: none !important; }
+}
+@media (min-width: 641px) {
+  .ifi-show-mobile-only { display: none !important; }
+}
