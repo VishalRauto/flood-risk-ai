@@ -1130,34 +1130,33 @@ I can help you with:
     return (
         <div className="min-h-screen bg-black text-white overflow-hidden">
             {/* ── Header ─────────────────────────────────────────────── */}
-            <div className="border-b border-border" style={{ borderColor: 'rgba(0,212,255,0.12)' }}>
-                {/* Navigation Row */}
-                <div className="flex items-center px-6 pb-4">
-                    {/* Left: Logo + Region Selector */}
-                    <div className="flex items-center space-x-4 py-4 flex-1">
+            <div className="border-b border-border" style={{ borderColor: 'rgba(0,212,255,0.12)', background: 'rgba(5,10,28,0.97)', backdropFilter: 'blur(20px)', position: 'sticky', top: 0, zIndex: 40 }}>
+
+                {/* ── Row 1: Logo + Region | Right Links ── */}
+                <div className="flex items-center justify-between px-6 pt-3 pb-2">
+
+                    {/* Left: Brand + Region */}
+                    <div className="flex items-center gap-4">
                         <a href="/" style={{ display:'flex', alignItems:'center', gap:8, textDecoration:'none' }}>
-                            <span className="text-3xl">🌊</span>
-                            <h1 className="text-xl font-black text-white" style={{ background:'linear-gradient(135deg,#fff,#00D4FF)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>
+                            <span style={{ fontSize:26 }}>🌊</span>
+                            <h1 className="text-xl font-black" style={{ background:'linear-gradient(135deg,#fff,#00D4FF)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent', margin:0 }}>
                                 Flood Intelligence
                             </h1>
                         </a>
 
                         {/* Region Selector */}
-                        <div className="flex items-center space-x-2 ml-4">
-                            <MapPin className="h-4 w-4 text-yellow-400" />
+                        <div className="flex items-center gap-2">
+                            <MapPin className="h-4 w-4 text-yellow-400 shrink-0" />
                             <Select value={selectedRegion} onValueChange={handleRegionChange}>
-                                <SelectTrigger className="w-[200px] bg-gray-900/80 border-yellow-500/30 text-white hover:bg-gray-900 hover:border-yellow-500/50">
+                                <SelectTrigger className="w-[180px] bg-gray-900/80 border-yellow-500/30 text-white hover:bg-gray-900 hover:border-yellow-500/50 h-8 text-xs">
                                     <SelectValue>
                                         {currentRegionInfo ? currentRegionInfo.name : 'Select Region'}
                                     </SelectValue>
                                 </SelectTrigger>
                                 <SelectContent className="bg-gray-900 border-yellow-500/30 z-[9999]">
                                     {availableRegions.map((region) => (
-                                        <SelectItem
-                                            key={region.code}
-                                            value={region.code}
-                                            className="text-white hover:bg-yellow-500/10 focus:bg-yellow-500/20"
-                                        >
+                                        <SelectItem key={region.code} value={region.code}
+                                            className="text-white hover:bg-yellow-500/10 focus:bg-yellow-500/20">
                                             <div className="flex flex-col">
                                                 <span className="font-medium">{region.name}</span>
                                                 <span className="text-xs text-gray-400">{region.watershed_count} watersheds</span>
@@ -1169,49 +1168,35 @@ I can help you with:
                         </div>
                     </div>
 
-                    {/* Center - Navigation Tabs (absolute centered) */}
-                    <div className="flex justify-center absolute left-1/2 transform -translate-x-1/2">
-                        <TubelightNavbar
-                            items={[
-                                { id: 1, name: 'Live Map', desc: 'Real-time watershed monitoring', icon: MapPin },
-                                { id: 2, name: 'Analytics', desc: 'Trends and forecasting', icon: BarChart3 },
-                                { id: 3, name: 'Alerts', desc: 'Emergency notifications', icon: AlertTriangle },
-                                { id: 4, name: 'AI Agents', desc: 'Agent details and management', icon: Brain },
-                                { id: 5, name: 'Research', desc: 'ML metrics, validation & ablation', icon: FlaskConical }
-                            ]}
-                            activeTab={activeTab}
-                            onTabChange={setActiveTab}
-                        />
-                    </div>
-
-                    {/* Right: Links + Auth */}
-                    <div className="flex items-center space-x-2 flex-1 justify-end">
+                    {/* Right: Site links + status badges */}
+                    <div className="flex items-center gap-2">
 
                         {/* Public Portal */}
                         <a href="/public" className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                           style={{ background:'rgba(0,212,255,0.08)', border:'1px solid rgba(0,212,255,0.2)', color:'#00D4FF' }}>
+                           style={{ background:'rgba(0,212,255,0.08)', border:'1px solid rgba(0,212,255,0.2)', color:'#00D4FF', textDecoration:'none' }}>
                             🌊 Public
                         </a>
 
-                        {/* 3D View — single instance only here */}
+                        {/* 3D View */}
                         <a href="/luxury" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all hover:scale-105"
-                           style={{ background:'linear-gradient(135deg,#D4AF37,#A67C1C)', color:'#050A1C', boxShadow:'0 0 12px rgba(212,175,55,0.35)' }}>
+                           style={{ background:'linear-gradient(135deg,#D4AF37,#A67C1C)', color:'#050A1C', boxShadow:'0 0 12px rgba(212,175,55,0.35)', textDecoration:'none' }}>
                             ✨ 3D
                         </a>
 
                         {/* Language Switcher */}
                         <LanguageSwitcher compact />
 
-                        {/* Agents Online Status */}
+                        {/* Agents Online */}
                         <HoverCard>
                             <HoverCardTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-auto p-2 hover:bg-gray-800/50">
-                                    <div className="flex items-center space-x-2">
-                                        {agentSummary && <p className="text-sm font-semibold text-green-400">
-                                            <strong>{agentSummary.running_agents}</strong> Agents online
-                                        </p>
-                                        }
+                                <Button variant="ghost" size="sm" className="h-8 px-2 hover:bg-gray-800/50">
+                                    <div className="flex items-center gap-1.5">
                                         <Bot className="h-4 w-4 text-green-400" />
+                                        {agentSummary && (
+                                            <span className="text-xs font-semibold text-green-400 hidden md:inline">
+                                                {agentSummary.running_agents} online
+                                            </span>
+                                        )}
                                         <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                                     </div>
                                 </Button>
@@ -1224,24 +1209,10 @@ I can help you with:
                                             <p className="text-sm text-gray-300">
                                                 <strong>{agentSummary.running_agents}/{agentSummary.total_agents}</strong> agents online
                                             </p>
-                                            <p className="text-xs text-gray-400">
-                                                {agentSummary.total_insights} insights generated
-                                            </p>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={handleRiverRefresh}
-                                                disabled={refreshingData}
-                                                className="text-xs mt-2 w-full"
-                                            >
-                                                {refreshingData ? (
-                                                    <>
-                                                        <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
-                                                        Refreshing...
-                                                    </>
-                                                ) : (
-                                                    'Pull Latest Data from All Sources'
-                                                )}
+                                            <p className="text-xs text-gray-400">{agentSummary.total_insights} insights generated</p>
+                                            <Button variant="outline" size="sm" onClick={handleRiverRefresh}
+                                                disabled={refreshingData} className="text-xs mt-2 w-full">
+                                                {refreshingData ? <><RefreshCw className="h-3 w-3 mr-1 animate-spin" />Refreshing...</> : 'Pull Latest Data'}
                                             </Button>
                                         </>
                                     )}
@@ -1249,46 +1220,57 @@ I can help you with:
                             </HoverCardContent>
                         </HoverCard>
 
-                        {/* Emergency Status */}
+                        {/* Active Alerts badge */}
                         <HoverCard>
                             <HoverCardTrigger asChild>
-                                <Button variant="ghost" size="sm" className="h-auto p-2 hover:bg-gray-800/50">
-                                    <div className="flex items-center space-x-2">
-                                        <p className="text-sm font-semibold text-amber-300">
-                                            <strong>{dashboardData.summary.active_alerts}</strong> Alerts
-                                        </p>
+                                <Button variant="ghost" size="sm" className="h-8 px-2 hover:bg-gray-800/50">
+                                    <div className="flex items-center gap-1.5">
                                         <AlertTriangle className="h-4 w-4 text-amber-300" />
-                                        <div className={`w-2 h-2 rounded-full ${dashboardData.summary.active_alerts > 5 ? 'bg-amber-500 animate-pulse' :
-                                                dashboardData.summary.active_alerts > 0 ? 'bg-amber-400' :
-                                                    'bg-amber-600'
-                                            }`}></div>
+                                        <span className="text-xs font-semibold text-amber-300 hidden md:inline">
+                                            {dashboardData.summary.active_alerts} Alerts
+                                        </span>
+                                        <div className={`w-2 h-2 rounded-full ${
+                                            dashboardData.summary.active_alerts > 5 ? 'bg-amber-500 animate-pulse' :
+                                            dashboardData.summary.active_alerts > 0 ? 'bg-amber-400' : 'bg-amber-600'
+                                        }`}></div>
                                     </div>
                                 </Button>
                             </HoverCardTrigger>
                             <HoverCardContent side="bottom" className="w-80">
                                 <div className="space-y-2">
                                     <h4 className="text-sm font-semibold text-amber-300">🚨 Emergency Status</h4>
-                                    <p className="text-sm text-amber-200">
-                                        <strong>{dashboardData.summary.active_alerts}</strong> active alerts
-                                    </p>
+                                    <p className="text-sm text-amber-200"><strong>{dashboardData.summary.active_alerts}</strong> active alerts</p>
                                     <p className="text-xs text-amber-400">
                                         Status: {dashboardData.summary.high_risk_watersheds > 0 ? 'HIGH PRIORITY' : 'MONITORING'}
                                     </p>
                                     <div className="text-xs text-gray-500 mt-1">
-                                        Risk breakdown: {dashboardData.summary.high_risk_watersheds} high, {dashboardData.summary.moderate_risk_watersheds} moderate, {dashboardData.summary.low_risk_watersheds} low
+                                        {dashboardData.summary.high_risk_watersheds} high · {dashboardData.summary.moderate_risk_watersheds} moderate · {dashboardData.summary.low_risk_watersheds} low
                                     </div>
                                 </div>
                             </HoverCardContent>
                         </HoverCard>
                     </div>
-
-
-
                 </div>
+
+                {/* ── Row 2: Tab navigation — full width, centered ── */}
+                <div className="flex justify-center px-6 pb-1">
+                    <TubelightNavbar
+                        items={[
+                            { id: 1, name: 'Live Map',   desc: 'Real-time watershed monitoring',    icon: MapPin       },
+                            { id: 2, name: 'Analytics',  desc: 'Trends and forecasting',            icon: BarChart3    },
+                            { id: 3, name: 'Alerts',     desc: 'Emergency notifications',           icon: AlertTriangle},
+                            { id: 4, name: 'AI Agents',  desc: 'Agent details and management',      icon: Brain        },
+                            { id: 5, name: 'Research',   desc: 'ML metrics, validation & ablation', icon: FlaskConical },
+                        ]}
+                        activeTab={activeTab}
+                        onTabChange={setActiveTab}
+                    />
+                </div>
+
             </div>
 
             {/* Main Content */}
-            <div className="flex h-[calc(100vh-88px)]">
+            <div className="flex h-[calc(100vh-120px)]">
                 {/* Left Insights Panel */}
                 <div className="w-80 border-r border-border flex flex-col">
                     {/* AI Agents Status Header */}
